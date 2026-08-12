@@ -422,7 +422,7 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
             value={signature}
             onChange={(e) => setSignature(e.target.value)}
             rows={3}
-            placeholder={`**The organizing team**\n[vibeapps.dev](https://vibeapps.dev)`}
+            placeholder={`**The organizing team**\n[vibe.isllm.com](https://vibe.isllm.com)`}
             disabled={isSending}
             className="w-full px-3 py-2 text-sm border border-hairline rounded-md bg-surface focus:outline-none focus:ring-2 focus:ring-hairline-strong focus:border-transparent font-mono"
           />

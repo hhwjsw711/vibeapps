@@ -52,7 +52,7 @@ export const rebuild = internalMutation({
   args: { baseUrl: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const baseUrl = (args.baseUrl || "https://vibeapps.dev").replace(/\/$/, "");
+    const baseUrl = (args.baseUrl || "https://vibe.isllm.com").replace(/\/$/, "");
 
     const robots = buildRobotsTxt(baseUrl);
     const llms = await buildLlmsTxt(ctx, baseUrl);

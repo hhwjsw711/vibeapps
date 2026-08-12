@@ -69,7 +69,7 @@ export const sendEmail = internalAction({
         ? [
             {
               name: "List-Unsubscribe",
-              value: `<https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}>`,
+              value: `<https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}>`,
             },
             {
               name: "List-Unsubscribe-Post",

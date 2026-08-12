@@ -43,7 +43,7 @@ async function fetchWithTimeout(url: string): Promise<Response> {
       signal: controller.signal,
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (compatible; VibeAppsSpamCheck/1.0; +https://vibeapps.dev)",
+          "Mozilla/5.0 (compatible; VibeAppsSpamCheck/1.0; +https://vibe.isllm.com)",
         Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
       },
     });

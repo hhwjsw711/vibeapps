@@ -48,8 +48,8 @@ export const generateDailyAdminEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: left; margin-bottom: 30px;">
-              <a href="https://vibeapps.dev" style="text-decoration: none;">
-                <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
+              <a href="https://vibe.isllm.com" style="text-decoration: none;">
+                <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
               </a>
             </div>
             <h1 style="color: #292929;">VibeApps Daily Report</h1>
@@ -85,7 +85,7 @@ export const generateDailyAdminEmail = internalQuery({
             </div>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="https://vibeapps.dev/admin" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Admin Dashboard</a>
+              <a href="https://vibe.isllm.com/admin" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Admin Dashboard</a>
             </div>
 
             <p style="color: #666; font-size: 12px; text-align: center;">
@@ -93,7 +93,7 @@ export const generateDailyAdminEmail = internalQuery({
             </p>
             
             <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
               
               <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
                 <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
@@ -139,8 +139,8 @@ export const generateWelcomeEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: left; margin-bottom: 30px;">
-              <a href="https://vibeapps.dev" style="text-decoration: none;">
-                <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
+              <a href="https://vibe.isllm.com" style="text-decoration: none;">
+                <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
               </a>
             </div>
             <h1 style="color: #292929;">Welcome to VibeApps!</h1>
@@ -155,34 +155,34 @@ export const generateWelcomeEmail = internalQuery({
               <div style="margin: 15px 0;">
                 <strong>Explore Apps</strong><br>
                 Browse apps by category<br>
-                <a href="https://vibeapps.dev" style="color: #292929;">Explore Apps →</a>
+                <a href="https://vibe.isllm.com" style="color: #292929;">Explore Apps →</a>
               </div>
               
               <div style="margin: 15px 0;">
                 <strong>Submit Your App</strong><br>
                 Share your project with the community<br>
-                <a href="https://vibeapps.dev/submit" style="color: #292929;">Submit App →</a>
+                <a href="https://vibe.isllm.com/submit" style="color: #292929;">Submit App →</a>
               </div>
               
               <div style="margin: 15px 0;">
                 <strong>See what's trending</strong><br>
                 Vote  for your favorite apps<br>
-                <a href="https://vibeapps.dev/leaderboard" style="color: #292929;">Check out the leaderboard →</a>
+                <a href="https://vibe.isllm.com/leaderboard" style="color: #292929;">Check out the leaderboard →</a>
               </div>
               
               <div style="margin: 15px 0;">
                 <strong>Set up your profile</strong><br>
                 Choose your username, add your bio, upload a profile picture and enable or disable email notifications for your inbox. <br>
-                <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : "https://vibeapps.dev/set-username"}" style="color: #292929;">Complete your profile →</a>
+                <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : "https://vibe.isllm.com/set-username"}" style="color: #292929;">Complete your profile →</a>
               </div>
             </div>
 
           
             
-            <p>Happy building!<br>VibeApps.dev</p>
+            <p>Happy building!<br>VibeApps</p>
 
             <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666; font-size: 12px;">Manage email preferences in the Manage Profile & Account section on your profile page.</a>${args.unsubscribeToken ? ` | <a href="https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences in the Manage Profile & Account section on your profile page.</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
               
               <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
                 <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
@@ -311,7 +311,7 @@ export const generateEngagementEmail = internalQuery({
           <ul style="list-style: none; padding: 0;">
             ${engagements.map((eng) => `<li>• ${eng}</li>`).join("")}
           </ul>
-          <a href="https://vibeapps.dev/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">View App →</a>
+          <a href="https://vibe.isllm.com/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">View App →</a>
         </div>
       `;
     };
@@ -334,7 +334,7 @@ export const generateEngagementEmail = internalQuery({
       <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 10px 0;">
         <h3 style="margin-top: 0; color: #292929;">New submissions from people you follow:</h3>
         <ul style="list-style: none; padding: 0;">
-          ${args.followedSubmissions.map((sub) => `<li>• <a href="https://vibeapps.dev/s/${sub.storySlug || sub.storyId}" style="color: #292929; text-decoration: none;">"${sub.title}"</a> by ${sub.author}</li>`).join("")}
+          ${args.followedSubmissions.map((sub) => `<li>• <a href="https://vibe.isllm.com/s/${sub.storySlug || sub.storyId}" style="color: #292929; text-decoration: none;">"${sub.title}"</a> by ${sub.author}</li>`).join("")}
         </ul>
       </div>
     `
@@ -358,7 +358,7 @@ export const generateEngagementEmail = internalQuery({
             )
             .join("")}
         </ul>
-        ${args.mentions.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibeapps.dev/notifications" style="color: #292929;">View all ${args.mentions.length} mentions →</a></p>` : ""}
+        ${args.mentions.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibe.isllm.com/notifications" style="color: #292929;">View all ${args.mentions.length} mentions →</a></p>` : ""}
       </div>
     `
         : "";
@@ -381,7 +381,7 @@ export const generateEngagementEmail = internalQuery({
             )
             .join("")}
         </ul>
-        ${args.replies.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibeapps.dev/notifications" style="color: #292929;">View all ${args.replies.length} replies →</a></p>` : ""}
+        ${args.replies.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibe.isllm.com/notifications" style="color: #292929;">View all ${args.replies.length} replies →</a></p>` : ""}
       </div>
     `
         : "";
@@ -431,7 +431,7 @@ export const generateEngagementEmail = internalQuery({
             .join("")}
         </ul>
         <p style="margin: 10px 0;">
-          <a href="https://vibeapps.dev/inbox" style="color: #292929; text-decoration: none; font-weight: 500;">View your inbox →</a>
+          <a href="https://vibe.isllm.com/inbox" style="color: #292929; text-decoration: none; font-weight: 500;">View your inbox →</a>
         </p>
       </div>
     `
@@ -443,8 +443,8 @@ export const generateEngagementEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: left; margin-bottom: 30px;">
-              <a href="https://vibeapps.dev" style="text-decoration: none;">
-                <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
+              <a href="https://vibe.isllm.com" style="text-decoration: none;">
+                <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
               </a>
             </div>
             <h1 style="color: #292929;">Your apps received engagement today</h1>
@@ -470,14 +470,14 @@ export const generateEngagementEmail = internalQuery({
             ${inboxSection}
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/profile"}" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Your Profile</a>
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/profile"}" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Your Profile</a>
             </div>
 
             <p>Keep shipping amazing things!</p>
-            <p>VibeApps.dev. </p>
+            <p>VibeApps. </p>
 
             <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
               
               <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
                 <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
@@ -530,8 +530,8 @@ export const generateWeeklyDigest = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: left; margin-bottom: 30px;">
-              <a href="https://vibeapps.dev" style="text-decoration: none;">
-                <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
+              <a href="https://vibe.isllm.com" style="text-decoration: none;">
+                <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
               </a>
             </div>
             <h1 style="color: #292929;">Most Vibes This Week</h1>
@@ -546,7 +546,7 @@ export const generateWeeklyDigest = internalQuery({
                   .map(
                     (app, index) => `
                   <li style="margin: 10px 0;">
-                    <a href="https://vibeapps.dev/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">
+                    <a href="https://vibe.isllm.com/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">
                       <strong>${app.title}</strong>
                     </a> — ${app.vibes} vibes
                   </li>
@@ -557,13 +557,13 @@ export const generateWeeklyDigest = internalQuery({
             </div>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="https://vibeapps.dev/leaderboard" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Weekly Leaderboard</a>
+              <a href="https://vibe.isllm.com/leaderboard" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Weekly Leaderboard</a>
             </div>
 
-            <p>VibeApps.dev</p>
+            <p>VibeApps</p>
 
             <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
               
               <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
                 <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
@@ -610,8 +610,8 @@ export const generateBroadcastEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: left; margin-bottom: 30px;">
-              <a href="https://vibeapps.dev" style="text-decoration: none;">
-                <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
+              <a href="https://vibe.isllm.com" style="text-decoration: none;">
+                <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
               </a>
             </div>
             <div style="text-align: center; margin-bottom: 30px;">
@@ -624,14 +624,14 @@ export const generateBroadcastEmail = internalQuery({
             </div>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="https://vibeapps.dev" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Visit VibeApps</a>
+              <a href="https://vibe.isllm.com" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Visit VibeApps</a>
             </div>
 
             <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
               <p style="color: #666; font-size: 12px; margin: 0 0 10px 0;">
                 This message was sent by the VibeApps team to keep you updated on platform news and features.
               </p>
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
               
               <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
                 <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
@@ -679,8 +679,8 @@ export const generateMentionEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: left; margin-bottom: 30px;">
-              <a href="https://vibeapps.dev" style="text-decoration: none;">
-                <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
+              <a href="https://vibe.isllm.com" style="text-decoration: none;">
+                <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px; border-radius: 8px;" />
               </a>
             </div>
             <h1 style="color: #292929;">You were mentioned</h1>
@@ -700,7 +700,7 @@ export const generateMentionEmail = internalQuery({
             <p>- The VibeApps Team</p>
 
             <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : args.userId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibeapps.dev/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
               
               <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
                 <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
@@ -768,7 +768,7 @@ export const generateAdminUserReportEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: center; margin-bottom: 30px;">
-              <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
+              <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
             </div>
 
             <h1 style="color: #292929; margin-bottom: 10px;">User Report Requires Review</h1>
@@ -843,8 +843,8 @@ export const generateAdminUserReportEmail = internalQuery({
                 You received this email because you are an administrator at VibeApps.
               </p>
               <p style="color: #666; font-size: 12px; margin: 5px 0;">
-                <a href="${args.adminUsername ? `https://vibeapps.dev/${args.adminUsername}` : args.adminUserId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666;">Manage email preferences</a> | 
-                <a href="https://vibeapps.dev/admin" style="color: #666;">Admin Dashboard</a>
+                <a href="${args.adminUsername ? `https://vibe.isllm.com/${args.adminUsername}` : args.adminUserId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666;">Manage email preferences</a> | 
+                <a href="https://vibe.isllm.com/admin" style="color: #666;">Admin Dashboard</a>
               </p>
             </div>
           </div>
@@ -898,7 +898,7 @@ export const generateReportNotificationEmail = internalQuery({
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: center; margin-bottom: 30px;">
-              <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
+              <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
             </div>
 
             <h1 style="color: #292929; margin-bottom: 10px;">Story Report Requires Review</h1>
@@ -949,8 +949,8 @@ export const generateReportNotificationEmail = internalQuery({
                 You received this email because you are an administrator at VibeApps.
               </p>
               <p style="color: #666; font-size: 12px; margin: 5px 0;">
-                <a href="${args.adminUsername ? `https://vibeapps.dev/${args.adminUsername}` : args.adminUserId ? "https://vibeapps.dev/set-username" : "https://vibeapps.dev/sign-in?redirect_url=" + encodeURIComponent("https://vibeapps.dev/profile")}" style="color: #666;">Manage email preferences</a> | 
-                <a href="https://vibeapps.dev/admin" style="color: #666;">Admin Dashboard</a>
+                <a href="${args.adminUsername ? `https://vibe.isllm.com/${args.adminUsername}` : args.adminUserId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666;">Manage email preferences</a> | 
+                <a href="https://vibe.isllm.com/admin" style="color: #666;">Admin Dashboard</a>
               </p>
             </div>
           </div>

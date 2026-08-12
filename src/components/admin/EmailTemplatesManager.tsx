@@ -253,7 +253,7 @@ export function EmailTemplatesManager() {
               onChange={(e) =>
                 setEditor({ ...editor, signature: e.target.value })
               }
-              placeholder={`**The VibeApps Team**\n[vibeapps.dev](https://vibeapps.dev)`}
+              placeholder={`**The VibeApps Team**\n[vibe.isllm.com](https://vibe.isllm.com)`}
               rows={3}
               className="w-full px-3 py-2 bg-surface border border-hairline rounded-md text-copy focus:outline-none focus:ring-1 focus:ring-ink font-mono text-sm"
               disabled={isSaving}

@@ -31,7 +31,7 @@ export function judgingGroupUrls(slug: string): {
   resultsurl: string;
   submissionurl: string;
 } {
-  const base = `https://vibeapps.dev/judging/${slug}`;
+  const base = `https://vibe.isllm.com/judging/${slug}`;
   return {
     judgingurl: base,
     resultsurl: `${base}/results`,
@@ -140,7 +140,7 @@ export function templateEmailShell(
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: center; margin-bottom: 30px;">
-              <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
+              <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
             </div>
             ${bodyHtml}
             ${signatureBlock}

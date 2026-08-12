@@ -1369,7 +1369,7 @@ export function EmailManagement() {
                 <div className="text-sm text-yellow-800 space-y-1">
                   <p>
                     • <strong>From Address:</strong> VibeApps Updates
-                    &lt;alerts@updates.vibeapps.dev&gt;
+                    &lt;alerts@isllm.com&gt;
                   </p>
                   <p>
                     • <strong>Subject Prefix:</strong> "VibeApps Updates:"

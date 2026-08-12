@@ -23,7 +23,7 @@ const FOOTER = `
               VibeApps - The place to share and discover new apps built with AI.
             </p>
             <p style="margin-top: 8px;">
-              <a href="https://vibeapps.dev/profile" style="color: #666; font-size: 12px;">Manage email preferences</a>
+              <a href="https://vibe.isllm.com/profile" style="color: #666; font-size: 12px;">Manage email preferences</a>
             </p>`;
 
 function emailShell(body: string): string {
@@ -33,7 +33,7 @@ function emailShell(body: string): string {
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
           <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="text-align: center; margin-bottom: 30px;">
-              <img src="https://vibeapps.dev/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
+              <img src="https://vibe.isllm.com/android-chrome-512x512.png" alt="VibeApps" style="width: 48px; height: 48px;">
             </div>
             ${body}
             ${FOOTER}
@@ -128,7 +128,7 @@ export const sendSubmissionConfirmationEmail = internalAction({
     const eventLine = context.groupName
       ? `to <strong>${context.groupName}</strong>`
       : "to VibeApps";
-    const storyUrl = `https://vibeapps.dev/s/${context.storySlug}`;
+    const storyUrl = `https://vibe.isllm.com/s/${context.storySlug}`;
 
     const html = emailShell(`
             <h1 style="color: #292929; margin-bottom: 10px;">Submission received</h1>
@@ -184,7 +184,7 @@ export const sendNewSubmissionAdminAlert = internalAction({
       return null;
     }
 
-    const adminUrl = `https://vibeapps.dev/admin/judging/${context.groupSlug}?section=submissions`;
+    const adminUrl = `https://vibe.isllm.com/admin/judging/${context.groupSlug}?section=submissions`;
     const html = emailShell(`
             <h1 style="color: #292929; margin-bottom: 10px;">New submission in ${context.groupName}</h1>
             <p style="color: #666; margin-bottom: 20px;">
@@ -281,7 +281,7 @@ export const sendResultsLiveEmails = internalAction({
       return null;
     }
 
-    const resultsUrl = `https://vibeapps.dev/judging/${args.groupSlug}/results`;
+    const resultsUrl = `https://vibe.isllm.com/judging/${args.groupSlug}/results`;
 
     for (const recipient of recipients) {
       let unsubscribeToken: string | undefined;
