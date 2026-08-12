@@ -10,6 +10,9 @@ import {
   emailTypeValidator,
 } from "./emailTypes";
 
+/** Read email "From" header from env, fallback to alerts@isllm.com */
+const EMAIL_FROM = process.env.EMAIL_FROM || "VibeApps Updates <alerts@isllm.com>";
+
 /**
  * Core email sending action with logging, global kill switch, and per-type
  * toggles from the admin Email dashboard
@@ -79,7 +82,7 @@ export const sendEmail = internalAction({
       // replyTo is an array per the component's SendEmailOptions type.
       const result = await resend.sendEmail(ctx, {
         to: args.to,
-        from: "VibeApps Updates <alerts@updates.vibeapps.dev>",
+        from: EMAIL_FROM,
         subject: withSubjectPrefix(args.subject),
         html: args.html,
         replyTo: args.replyTo ? [args.replyTo] : undefined,

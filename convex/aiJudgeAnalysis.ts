@@ -1323,7 +1323,7 @@ async function callLlmWithFallback(
       return await callOpenAiCompatible(
         "https://openrouter.ai/api/v1/chat/completions",
         process.env.OPENROUTER_API_KEY,
-        "anthropic/claude-sonnet-4.5",
+        "deepseek/deepseek-chat-v3.1",
         "openrouter",
         systemPrompt,
         userMessage,

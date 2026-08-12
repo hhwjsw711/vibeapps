@@ -8,6 +8,9 @@ import {
 import { v } from "convex/values";
 import { requirePermission } from "./adminAccess";
 
+/** Read email "From" header from env, fallback to alerts@isllm.com */
+const EMAIL_FROM = process.env.EMAIL_FROM || "VibeApps Updates <alerts@isllm.com>";
+
 export const resend: Resend = new Resend(components.resend, {
   testMode: false, // Disable test mode to send to real email addresses
   // Component calls this mutation after verifying each Resend webhook event,
@@ -29,7 +32,7 @@ export const sendTestEmail = mutation({
 
     try {
       await resend.sendEmail(ctx, {
-        from: "VibeApps Updates <alerts@updates.vibeapps.dev>",
+        from: EMAIL_FROM,
         to: args.to,
         subject: "VibeApps Updates: Test email from admin",
         html: `
@@ -66,7 +69,7 @@ export const sendTestEmailInternal = internalMutation({
   handler: async (ctx, args) => {
     try {
       await resend.sendEmail(ctx, {
-        from: "VibeApps Updates <alerts@updates.vibeapps.dev>",
+        from: EMAIL_FROM,
         to: args.to || "wayne@convex.dev", // Default to your email
         subject: "VibeApps Updates: Test email from admin",
         html: `
@@ -105,7 +108,7 @@ export const sendEmail = internalAction({
   handler: async (ctx, args) => {
     try {
       await resend.sendEmail(ctx, {
-        from: "VibeApps Updates <alerts@updates.vibeapps.dev>",
+        from: EMAIL_FROM,
         to: args.to,
         subject: withSubjectPrefix(args.subject),
         html: args.html,
