@@ -1,14 +1,14 @@
 # Meta endpoint for social sharing (for manual testing and direct access)
-/meta/s/:slug https://acoustic-goldfinch-461.convex.site/meta/s?slug=:slug 200
+/meta/s/:slug https://reminiscent-goshawk-722.convex.site/meta/s?slug=:slug 200
 
 # Dynamic text files
-/robots.txt https://acoustic-goldfinch-461.convex.site/robots.txt 200
-/llms.txt https://acoustic-goldfinch-461.convex.site/llms.txt 200
+/robots.txt https://reminiscent-goshawk-722.convex.site/robots.txt 200
+/llms.txt https://reminiscent-goshawk-722.convex.site/llms.txt 200
 
 # Email unsubscribe (GET link clicks and RFC 8058 one-click POST).
 # Must proxy to the same Convex deployment that sends the emails,
 # since unsubscribe tokens live in that deployment's database.
-/api/unsubscribe https://acoustic-goldfinch-461.convex.site/api/unsubscribe 200
+/api/unsubscribe https://reminiscent-goshawk-722.convex.site/api/unsubscribe 200
 
 # All routes go to the SPA (including /s/:slug)
 /* /index.html 200 

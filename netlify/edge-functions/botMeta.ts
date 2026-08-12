@@ -33,26 +33,17 @@ export default async (request: Request, context: any) => {
     const slug = match[1];
 
     // IMPORTANT: Use PRODUCTION Convex deployment for crawler-visible metadata
-    // Prod convex cloud URL is whimsical-dalmatian-205; .site is required for HTTP actions
-    const metaUrl = `https://whimsical-dalmatian-205.convex.site/meta/s?slug=${encodeURIComponent(
+    // Prod convex URL is reminiscent-goshawk-722; .site is required for HTTP actions
+    const metaUrl = `https://reminiscent-goshawk-722.convex.site/meta/s?slug=${encodeURIComponent(
       slug,
     )}`;
 
-    let res = await fetch(metaUrl, {
+    const res = await fetch(metaUrl, {
       headers: {
         "cache-control":
           "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
       },
     });
-    if (res.status === 404) {
-      const devUrl = `https://acoustic-goldfinch-461.convex.site/meta/s?slug=${encodeURIComponent(slug)}`;
-      res = await fetch(devUrl, {
-        headers: {
-          "cache-control":
-            "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
-        },
-      });
-    }
     return new Response(await res.text(), {
       status: res.status,
       headers: {
