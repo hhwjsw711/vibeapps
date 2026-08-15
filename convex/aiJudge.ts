@@ -12,6 +12,8 @@ import { Workpool } from "@convex-dev/workpool";
 import { isUserAdmin, getAuthenticatedUserId } from "./users";
 import { requireJudgingGroupPermission } from "./adminAccess";
 import { verifyPassword } from "./judgingGroups";
+import { parseHackathonLogHeader } from "./hackathonLog"; // hackathon.md header parsing (admin views)
+import { logActivity } from "./activityLog";
 
 // Analyses run through a workpool with limited parallelism: faster than the
 // old one-at-a-time scheduler chain while staying inside GitHub rate limits.
@@ -20,7 +22,11 @@ const aiJudgePool = new Workpool(components.workpool, { maxParallelism: 4 });
 // Built-in "Best Use of Convex" rubric. Shared with the analysis action so
 // prompts and stored results always use the same keys. Groups can append
 // their own criteria via aiCustomCriteria (see getRubricForGroup).
-export const AI_JUDGE_RUBRIC: Array<{ key: string; label: string; description: string }> = [
+export const AI_JUDGE_RUBRIC: Array<{
+  key: string;
+  label: string;
+  description: string;
+}> = [
   {
     key: "schema",
     label: "Schema and data modeling",
@@ -59,7 +65,23 @@ export const AI_JUDGE_RUBRIC: Array<{ key: string; label: string; description: s
   },
 ];
 
-export type RubricCriterion = { key: string; label: string; description: string };
+export type RubricCriterion = {
+  key: string;
+  label: string;
+  description: string;
+};
+
+// Frontend checker: preset custom criterion key plus the fixed hosting
+// platform list for per-platform sub-weights. The detected platform's weight
+// multiplies the frontend-checker criterion weight in the weighted ranking.
+export const FRONTEND_CHECKER_KEY = "frontend-checker";
+export const AI_FRONTEND_PLATFORMS: Array<{ key: string; label: string }> = [
+  { key: "codex-sites", label: "Codex Sites" },
+  { key: "convex-hosting", label: "Convex static hosting" },
+  { key: "vercel", label: "Vercel" },
+  { key: "netlify", label: "Netlify" },
+  { key: "other", label: "Other" },
+];
 
 // Effective rubric for a group: the built-in six plus any admin-defined
 // custom criteria, minus any criteria the admin switched off. Used by the
@@ -125,6 +147,12 @@ const urlCheckValidator = v.object({
   note: v.string(),
 });
 
+// Shared validator for the deterministic frontend hosting detection
+export const frontendHostingValidator = v.object({
+  platform: v.string(),
+  evidence: v.string(),
+});
+
 // Shared validator for deterministic repo facts (mirrors schema.ts)
 export const repoFactsValidator = v.object({
   convexFileCount: v.number(),
@@ -184,17 +212,28 @@ const repoAccessValidator = v.union(
 // aiRubricWeights. Never stored: weight edits and admin score edits both stay
 // consistent because every read recomputes.
 export function computeWeightedScore(
-  criteriaScores:
-    | Array<{ key: string; score: number }>
-    | undefined,
+  criteriaScores: Array<{ key: string; score: number }> | undefined,
   weights: Array<{ key: string; weight: number }> | undefined,
+  // Detected hosting platform for this result plus the group's per-platform
+  // weights. The platform weight multiplies the frontend-checker criterion
+  // weight only (default 1 keeps behavior unchanged).
+  frontend?: {
+    platform?: string;
+    platformWeights?: Array<{ key: string; weight: number }>;
+  },
 ): number | undefined {
   if (!criteriaScores || criteriaScores.length === 0) return undefined;
   const weightByKey = new Map((weights ?? []).map((w) => [w.key, w.weight]));
-  const total = criteriaScores.reduce(
-    (sum, cs) => sum + cs.score * (weightByKey.get(cs.key) ?? 1),
-    0,
-  );
+  const platformWeight = frontend?.platform
+    ? ((frontend.platformWeights ?? []).find((w) => w.key === frontend.platform)
+        ?.weight ?? 1)
+    : 1;
+  const total = criteriaScores.reduce((sum, cs) => {
+    const base = weightByKey.get(cs.key) ?? 1;
+    const multiplier =
+      cs.key === FRONTEND_CHECKER_KEY ? base * platformWeight : base;
+    return sum + cs.score * multiplier;
+  }, 0);
   return Math.round(total * 100) / 100;
 }
 
@@ -239,11 +278,18 @@ const aiResultValidator = v.object({
     }),
   ),
   urlCheck: v.optional(urlCheckValidator),
+  frontendHosting: v.optional(frontendHostingValidator),
+  // hackathon.md header cross-check notes; populated for admin views only
+  logDiscrepancies: v.optional(v.array(v.string())),
+  // Event free text from the repo or pasted hackathon.md header; admin only
+  hackathonLogEvent: v.optional(v.string()),
   editedAt: v.optional(v.number()),
 });
 
 // Helper mirroring judgingGroups: exclude deleted/hidden/archived/rejected stories
-function isStoryValidForJudging(story: Doc<"stories"> | null): story is Doc<"stories"> {
+function isStoryValidForJudging(
+  story: Doc<"stories"> | null,
+): story is Doc<"stories"> {
   if (!story) return false;
   if (story.isHidden === true) return false;
   if (story.isArchived === true) return false;
@@ -257,6 +303,10 @@ async function enrichResults(
   ctx: QueryCtx,
   results: Array<Doc<"aiJudgeResults">>,
   weights: Array<{ key: string; weight: number }> | undefined,
+  frontendWeights?: Array<{ key: string; weight: number }>,
+  // When true (admin views only), include hackathon.md cross-check notes and
+  // the header event text. Public callers leave this undefined.
+  options?: { includeLogMeta?: boolean },
 ) {
   const enriched: Array<{
     _id: Id<"aiJudgeResults">;
@@ -267,7 +317,12 @@ async function enrichResults(
     storyUrl?: string;
     githubUrl?: string;
     status: "pending" | "running" | "completed" | "failed";
-    criteriaScores?: Array<{ key: string; label: string; score: number; reasoning: string }>;
+    criteriaScores?: Array<{
+      key: string;
+      label: string;
+      score: number;
+      reasoning: string;
+    }>;
     totalScore?: number;
     averageScore?: number;
     weightedScore?: number;
@@ -284,13 +339,20 @@ async function enrichResults(
     selfReportedHarness?: string;
     selfReportedModel?: string;
     error?: string;
-    sourcesUsed?: { github: boolean; liveUrl: boolean; videoTranscript?: boolean };
+    sourcesUsed?: {
+      github: boolean;
+      liveUrl: boolean;
+      videoTranscript?: boolean;
+    };
     urlCheck?: {
       checkedUrl?: string;
       isLive: boolean;
       statusCode?: number;
       note: string;
     };
+    frontendHosting?: { platform: string; evidence: string };
+    logDiscrepancies?: Array<string>;
+    hackathonLogEvent?: string;
     editedAt?: number;
   }> = [];
 
@@ -309,7 +371,10 @@ async function enrichResults(
       criteriaScores: result.criteriaScores,
       totalScore: result.totalScore,
       averageScore: result.averageScore,
-      weightedScore: computeWeightedScore(result.criteriaScores, weights),
+      weightedScore: computeWeightedScore(result.criteriaScores, weights, {
+        platform: result.frontendHosting?.platform,
+        platformWeights: frontendWeights,
+      }),
       overallReasoning: result.overallReasoning,
       convexFeaturesDetected: result.convexFeaturesDetected,
       componentsDetected: result.componentsDetected,
@@ -326,6 +391,18 @@ async function enrichResults(
       error: result.error,
       sourcesUsed: result.sourcesUsed,
       urlCheck: result.urlCheck,
+      frontendHosting: result.frontendHosting,
+      logDiscrepancies: options?.includeLogMeta
+        ? result.logDiscrepancies
+        : undefined,
+      // Prefer the event stored at analysis time (parsed from the repo's
+      // hackathon.md); fall back to parsing a pasted log for older rows.
+      hackathonLogEvent: options?.includeLogMeta
+        ? (result.hackathonLogEvent ??
+          (story.hackathonLog
+            ? parseHackathonLogHeader(story.hackathonLog).event
+            : undefined))
+        : undefined,
       editedAt: result.editedAt,
     });
   }
@@ -337,7 +414,8 @@ async function enrichResults(
     r.criteriaScores?.find((cs) => cs.key === "depth")?.score ?? 0;
   enriched.sort((a, b) => {
     const scoreDiff =
-      (b.weightedScore ?? b.totalScore ?? -1) - (a.weightedScore ?? a.totalScore ?? -1);
+      (b.weightedScore ?? b.totalScore ?? -1) -
+      (a.weightedScore ?? a.totalScore ?? -1);
     if (scoreDiff !== 0) return scoreDiff;
     const componentDiff =
       (b.componentsUsed?.length ?? 0) - (a.componentsUsed?.length ?? 0);
@@ -421,6 +499,18 @@ export const startReview = mutation({
       );
     }
 
+    // Group activity log entry for the audit trail
+    await logActivity(ctx, {
+      category: "judging",
+      action: "judging.aiRunStarted",
+      message: `Started an AI review run in ${group.name} (${pendingIds.length} submission${pendingIds.length === 1 ? "" : "s"} queued)`,
+      targetType: "judgingGroup",
+      targetId: args.groupId,
+      targetLabel: group.name,
+      groupId: args.groupId,
+      metadata: { queued: pendingIds.length },
+    });
+
     return { queued: pendingIds.length };
   },
 });
@@ -445,8 +535,25 @@ export const retrySubmission = mutation({
       status: "pending" as const,
       error: undefined,
     });
-    await aiJudgePool.enqueueAction(ctx, internal.aiJudgeAnalysis.analyzeSubmission, {
-      resultId: args.resultId,
+    await aiJudgePool.enqueueAction(
+      ctx,
+      internal.aiJudgeAnalysis.analyzeSubmission,
+      {
+        resultId: args.resultId,
+      },
+    );
+
+    // Group activity log entry for the audit trail
+    const retryStory = await ctx.db.get(result.storyId);
+    await logActivity(ctx, {
+      category: "judging",
+      action: "judging.aiRetryQueued",
+      message: `Queued an AI review retry for "${retryStory?.title ?? "a submission"}"`,
+      targetType: "story",
+      targetId: result.storyId,
+      targetLabel: retryStory?.title,
+      groupId: result.groupId,
+      metadata: { storySlug: retryStory?.slug },
     });
     return null;
   },
@@ -466,6 +573,11 @@ export const updateAiRubricWeights = mutation({
     // Rubric keys switched off for this group. Omitted = leave unchanged;
     // empty array = enable everything.
     disabledKeys: v.optional(v.array(v.string())),
+    // Per-platform weights for the frontend-checker criterion. Omitted =
+    // leave unchanged; empty array = reset every platform to 1.
+    frontendWeights: v.optional(
+      v.array(v.object({ key: v.string(), weight: v.number() })),
+    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -493,7 +605,11 @@ export const updateAiRubricWeights = mutation({
           throw new Error(`Duplicate rubric key "${entry.key}"`);
         }
         seen.add(entry.key);
-        if (!Number.isFinite(entry.weight) || entry.weight < 0 || entry.weight > 10) {
+        if (
+          !Number.isFinite(entry.weight) ||
+          entry.weight < 0 ||
+          entry.weight > 10
+        ) {
           throw new Error("Weights must be numbers between 0 and 10");
         }
       }
@@ -502,7 +618,35 @@ export const updateAiRubricWeights = mutation({
     const patch: {
       aiRubricWeights: typeof args.weights;
       aiDisabledCriteria?: Array<string> | undefined;
+      aiFrontendWeights?: typeof args.frontendWeights;
     } = { aiRubricWeights: args.weights };
+
+    if (args.frontendWeights !== undefined) {
+      const platformKeys = new Set(AI_FRONTEND_PLATFORMS.map((p) => p.key));
+      const seenPlatforms = new Set<string>();
+      for (const entry of args.frontendWeights) {
+        if (!platformKeys.has(entry.key)) {
+          throw new Error(`Unknown frontend platform key "${entry.key}"`);
+        }
+        if (seenPlatforms.has(entry.key)) {
+          throw new Error(`Duplicate frontend platform key "${entry.key}"`);
+        }
+        seenPlatforms.add(entry.key);
+        if (
+          !Number.isFinite(entry.weight) ||
+          entry.weight < 0 ||
+          entry.weight > 10
+        ) {
+          throw new Error("Platform weights must be numbers between 0 and 10");
+        }
+      }
+      // All-default (or empty) platform weights clear the stored field
+      const allDefault = args.frontendWeights.every((w) => w.weight === 1);
+      patch.aiFrontendWeights =
+        args.frontendWeights.length === 0 || allDefault
+          ? undefined
+          : args.frontendWeights;
+    }
 
     if (args.disabledKeys !== undefined) {
       const disabled = new Set<string>();
@@ -556,7 +700,9 @@ export const updateAiCustomCriteria = mutation({
 
     if (criteria) {
       if (criteria.length > MAX_CUSTOM_CRITERIA) {
-        throw new Error(`At most ${MAX_CUSTOM_CRITERIA} custom criteria are allowed`);
+        throw new Error(
+          `At most ${MAX_CUSTOM_CRITERIA} custom criteria are allowed`,
+        );
       }
       const builtInKeys = new Set(AI_JUDGE_RUBRIC.map((c) => c.key));
       const seen = new Set<string>();
@@ -600,10 +746,15 @@ export const updateAiCustomCriteria = mutation({
       validKeys.has(key),
     );
 
+    // Removing the frontend-checker criterion also clears its platform weights
+    const keepFrontendWeights = validKeys.has(FRONTEND_CHECKER_KEY);
+
     await ctx.db.patch(args.groupId, {
       aiCustomCriteria: criteria,
       aiRubricWeights: prunedWeights.length > 0 ? prunedWeights : undefined,
-      aiDisabledCriteria: prunedDisabled.length > 0 ? prunedDisabled : undefined,
+      aiDisabledCriteria:
+        prunedDisabled.length > 0 ? prunedDisabled : undefined,
+      ...(keepFrontendWeights ? {} : { aiFrontendWeights: undefined }),
     });
     return null;
   },
@@ -709,7 +860,10 @@ export const updateResultScore = mutation({
       }
     }
 
-    const totalScore = args.criteriaScores.reduce((sum, cs) => sum + cs.score, 0);
+    const totalScore = args.criteriaScores.reduce(
+      (sum, cs) => sum + cs.score,
+      0,
+    );
     const averageScore =
       args.criteriaScores.length > 0
         ? Math.round((totalScore / args.criteriaScores.length) * 100) / 100
@@ -757,7 +911,13 @@ export const getGroupAiResults = query({
       .withIndex("by_groupId", (q) => q.eq("groupId", args.groupId))
       .collect();
 
-    const results = await enrichResults(ctx, rows, group?.aiRubricWeights);
+    const results = await enrichResults(
+      ctx,
+      rows,
+      group?.aiRubricWeights,
+      group?.aiFrontendWeights,
+      { includeLogMeta: true }, // Admin view: show log cross-check notes
+    );
     const counts = { pending: 0, running: 0, completed: 0, failed: 0 };
     for (const r of results) {
       counts[r.status]++;
@@ -813,6 +973,7 @@ export const getGroupAiReportData = query({
           selfReportedHarness: v.optional(v.string()),
           selfReportedModel: v.optional(v.string()),
           urlCheck: v.optional(urlCheckValidator),
+          frontendHosting: v.optional(frontendHostingValidator),
           sourcesUsed: v.optional(
             v.object({
               github: v.boolean(),
@@ -872,7 +1033,12 @@ export const getGroupAiReportData = query({
         statusCode?: number;
         note: string;
       };
-      sourcesUsed?: { github: boolean; liveUrl: boolean; videoTranscript?: boolean };
+      frontendHosting?: { platform: string; evidence: string };
+      sourcesUsed?: {
+        github: boolean;
+        liveUrl: boolean;
+        videoTranscript?: boolean;
+      };
       error?: string;
     }> = [];
 
@@ -893,7 +1059,14 @@ export const getGroupAiReportData = query({
         criteriaScores: row.criteriaScores,
         totalScore: row.totalScore,
         averageScore: row.averageScore,
-        weightedScore: computeWeightedScore(row.criteriaScores, group.aiRubricWeights),
+        weightedScore: computeWeightedScore(
+          row.criteriaScores,
+          group.aiRubricWeights,
+          {
+            platform: row.frontendHosting?.platform,
+            platformWeights: group.aiFrontendWeights,
+          },
+        ),
         overallReasoning: row.overallReasoning,
         convexFeaturesDetected: row.convexFeaturesDetected,
         componentsDetected: row.componentsDetected,
@@ -905,6 +1078,7 @@ export const getGroupAiReportData = query({
         selfReportedHarness: story.selfReportedHarness,
         selfReportedModel: story.selfReportedModel,
         urlCheck: row.urlCheck,
+        frontendHosting: row.frontendHosting,
         sourcesUsed: row.sourcesUsed,
         error: row.error,
       });
@@ -974,6 +1148,8 @@ export const getSubmissionForAnalysis = internalQuery({
       githubUrl: v.optional(v.string()),
       videoUrl: v.optional(v.string()),
       tags: v.array(v.string()),
+      // Pasted hackathon.md (already capped + redacted at submission time)
+      hackathonLog: v.optional(v.string()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1006,6 +1182,7 @@ export const getSubmissionForAnalysis = internalQuery({
       githubUrl: story.githubUrl,
       videoUrl: story.videoUrl,
       tags,
+      hackathonLog: story.hackathonLog,
     };
   },
 });
@@ -1037,6 +1214,11 @@ export const saveResult = internalMutation({
           videoTranscript: v.optional(v.boolean()),
         }),
         urlCheck: v.optional(urlCheckValidator),
+        frontendHosting: v.optional(frontendHostingValidator),
+        // hackathon.md header claims vs detected facts (recorded, never scored)
+        logDiscrepancies: v.optional(v.array(v.string())),
+        // Event free text from the hackathon.md header (repo copy wins)
+        hackathonLogEvent: v.optional(v.string()),
       }),
       v.object({
         kind: v.literal("error"),
@@ -1056,7 +1238,9 @@ export const saveResult = internalMutation({
       );
       const averageScore =
         args.outcome.criteriaScores.length > 0
-          ? Math.round((totalScore / args.outcome.criteriaScores.length) * 100) / 100
+          ? Math.round(
+              (totalScore / args.outcome.criteriaScores.length) * 100,
+            ) / 100
           : 0;
       await ctx.db.patch(args.resultId, {
         status: "completed" as const,
@@ -1078,6 +1262,9 @@ export const saveResult = internalMutation({
         model: undefined,
         sourcesUsed: args.outcome.sourcesUsed,
         urlCheck: args.outcome.urlCheck,
+        frontendHosting: args.outcome.frontendHosting,
+        logDiscrepancies: args.outcome.logDiscrepancies,
+        hackathonLogEvent: args.outcome.hackathonLogEvent,
         error: undefined,
         editedBy: undefined,
         editedAt: undefined,
@@ -1086,6 +1273,45 @@ export const saveResult = internalMutation({
       await ctx.db.patch(args.resultId, {
         status: "failed" as const,
         error: args.outcome.errorMessage,
+      });
+    }
+
+    // Group activity log entry per finished review (actor is the AI judge)
+    const reviewedStory = await ctx.db.get(result.storyId);
+    if (args.outcome.kind === "success") {
+      const avg =
+        args.outcome.criteriaScores.length > 0
+          ? Math.round(
+              (args.outcome.criteriaScores.reduce(
+                (sum, cs) => sum + cs.score,
+                0,
+              ) /
+                args.outcome.criteriaScores.length) *
+                100,
+            ) / 100
+          : 0;
+      await logActivity(ctx, {
+        category: "judging",
+        action: "judging.aiReviewCompleted",
+        message: `AI review completed for "${reviewedStory?.title ?? "a submission"}" (avg ${avg})`,
+        actorName: "AI Judge",
+        targetType: "story",
+        targetId: result.storyId,
+        targetLabel: reviewedStory?.title,
+        groupId: result.groupId,
+        metadata: { storySlug: reviewedStory?.slug, averageScore: avg },
+      });
+    } else {
+      await logActivity(ctx, {
+        category: "judging",
+        action: "judging.aiReviewFailed",
+        message: `AI review failed for "${reviewedStory?.title ?? "a submission"}": ${args.outcome.errorMessage.slice(0, 140)}`,
+        actorName: "AI Judge",
+        targetType: "story",
+        targetId: result.storyId,
+        targetLabel: reviewedStory?.title,
+        groupId: result.groupId,
+        metadata: { storySlug: reviewedStory?.slug },
       });
     }
 
@@ -1150,7 +1376,7 @@ export const validateAiResultsPassword = mutation({
     if (!group || !group.aiResultsPassword) {
       return false;
     }
-    return verifyPassword(args.password, group.aiResultsPassword);
+    return await verifyPassword(args.password, group.aiResultsPassword);
   },
 });
 
@@ -1168,12 +1394,15 @@ export const verifyAiResultsPassword = query({
     if (!group || !group.aiResultsPassword) {
       return false;
     }
-    return verifyPassword(args.password, group.aiResultsPassword);
+    return await verifyPassword(args.password, group.aiResultsPassword);
   },
 });
 
 // Shared handler for public/validated AI results: completed results only, ranked
-async function getCompletedResultsForGroup(ctx: QueryCtx, groupId: Id<"judgingGroups">) {
+async function getCompletedResultsForGroup(
+  ctx: QueryCtx,
+  groupId: Id<"judgingGroups">,
+) {
   const group = await ctx.db.get(groupId);
   const rows = await ctx.db
     .query("aiJudgeResults")
@@ -1183,6 +1412,7 @@ async function getCompletedResultsForGroup(ctx: QueryCtx, groupId: Id<"judgingGr
     ctx,
     rows.filter((r) => r.status === "completed"),
     group?.aiRubricWeights,
+    group?.aiFrontendWeights,
   );
   return enriched;
 }
@@ -1239,7 +1469,7 @@ export const resolveResultsAccess = internalQuery({
     if (
       args.password &&
       group.aiResultsPassword &&
-      verifyPassword(args.password, group.aiResultsPassword)
+      (await verifyPassword(args.password, group.aiResultsPassword))
     ) {
       return group._id;
     }
@@ -1252,11 +1482,18 @@ export const resolveResultsAccess = internalQuery({
  * getValidatedGroupScores in judgeScores.ts).
  */
 export const getValidatedAiResults = query({
-  args: { groupId: v.id("judgingGroups") },
+  args: { groupId: v.id("judgingGroups"), password: v.string() },
   returns: v.union(v.null(), v.array(aiResultValidator)),
   handler: async (ctx, args) => {
     const group = await ctx.db.get(args.groupId);
     if (!group || !group.aiJudgeEnabled) {
+      return null;
+    }
+    const admin = await isUserAdmin(ctx);
+    const passwordOk =
+      !!group.aiResultsPassword &&
+      (await verifyPassword(args.password, group.aiResultsPassword));
+    if (!admin && !passwordOk) {
       return null;
     }
     return await getCompletedResultsForGroup(ctx, args.groupId);

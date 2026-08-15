@@ -7,6 +7,7 @@ import {
   Linkedin,
   Twitter,
   Github,
+  FileText,
   Flag,
   Bookmark,
   BookmarkCheck,
@@ -116,6 +117,35 @@ const BookmarkButton = ({ storyId }: { storyId: Id<"stories"> }) => {
   );
 };
 
+function isPublicDirectoryStory(story: Story): boolean {
+  if (story.status !== "approved") return false;
+  if (story.isHidden === true) return false;
+  if (story.isSpam === true) return false;
+  if (story.isArchived === true) return false;
+  return true;
+}
+
+function StoryAgentFileLinks({ slug }: { slug: string }) {
+  return (
+    <>
+      <a
+        href={`/s/${slug}/llms.txt`}
+        className="flex items-center gap-2 text-sm text-copy hover:text-ink hover:underline"
+      >
+        <FileText className="w-4 h-4" />
+        llms.txt
+      </a>
+      <a
+        href={`/md/${slug}.md`}
+        className="flex items-center gap-2 text-sm text-copy hover:text-ink hover:underline"
+      >
+        <FileText className="w-4 h-4" />
+        {slug}.md
+      </a>
+    </>
+  );
+}
+
 export function StoryDetail({ story }: StoryDetailProps) {
   const navigate = useNavigate(); // Initialize navigate
   const { isSignedIn, isLoaded: isClerkLoaded } = useAuth(); // Get auth state
@@ -170,6 +200,35 @@ export function StoryDetail({ story }: StoryDetailProps) {
 
     return null;
   }, [story.title, story.description, story.screenshotUrl]);
+
+  // Structured data for answer engines. Does not change Open Graph tags.
+  React.useEffect(() => {
+    const imageUrl =
+      story.screenshotUrl ||
+      "https://vibe.isllm.com/vibe-apps-open-graphi-image.png";
+    const payload = {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: story.title,
+      description: story.description,
+      url: `https://vibe.isllm.com/s/${story.slug}`,
+      image: imageUrl,
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Web",
+    };
+    const existing = document.getElementById("vibeapps-jsonld");
+    const script =
+      existing instanceof HTMLScriptElement
+        ? existing
+        : document.createElement("script");
+    script.id = "vibeapps-jsonld";
+    script.type = "application/ld+json";
+    script.textContent = JSON.stringify(payload).replace(/</g, "\\u003c");
+    if (!existing) document.head.appendChild(script);
+    return () => {
+      script.remove();
+    };
+  }, [story.title, story.description, story.screenshotUrl, story.slug]);
 
   // Edit mode state
   const isEditMode = searchParams.get("edit") === "true";
@@ -1003,6 +1062,7 @@ export function StoryDetail({ story }: StoryDetailProps) {
           enabledFormFields?.some(
             (field) => (story as any)[field.storyPropertyName],
           ) ||
+          (story.dynamicFormValues?.length ?? 0) > 0 ||
           story.tags?.length > 0) && (
           <div className="w-80 flex-shrink-0 hidden lg:block self-start">
             <div className="bg-surface-alt rounded-lg p-4 border border-hairline sticky top-8">
@@ -1060,7 +1120,14 @@ export function StoryDetail({ story }: StoryDetailProps) {
                 {enabledFormFields
                   ?.filter((field) => field.key !== "githubUrl")
                   .map((field) => {
-                    const fieldValue = (story as any)[field.storyPropertyName];
+                    // Fields without a dedicated stories column store their
+                    // value in dynamicFormValues (e.g. radio/multiselect)
+                    const fieldValue =
+                      (story as any)[field.storyPropertyName] ??
+                      story.dynamicFormValues?.find(
+                        (entry: { key: string; value: string }) =>
+                          entry.key === field.key,
+                      )?.value;
                     if (!fieldValue) return null;
 
                     // Get appropriate icon based on field key or type
@@ -1184,8 +1251,11 @@ export function StoryDetail({ story }: StoryDetailProps) {
                 )}
               </div>
             </div>
-            {/* Changelog Link */}
-            <div className="mt-4 pt-3 border-t border-hairline">
+            {/* Agent files and changelog */}
+            <div className="mt-4 pt-3 border-t border-hairline space-y-2">
+              {isPublicDirectoryStory(story) && (
+                <StoryAgentFileLinks slug={story.slug} />
+              )}
               <a
                 href="#changelog"
                 className="flex items-center gap-2 text-sm text-copy hover:text-ink hover:underline"
@@ -2066,6 +2136,7 @@ export function StoryDetail({ story }: StoryDetailProps) {
           enabledFormFields?.some(
             (field) => (story as any)[field.storyPropertyName],
           ) ||
+          (story.dynamicFormValues?.length ?? 0) > 0 ||
           story.tags?.length > 0) && (
           <div className="mt-8 bg-surface rounded-lg p-6 border border-hairline lg:hidden">
             <h2 className="text-lg font-medium text-copy mb-4">
@@ -2122,7 +2193,14 @@ export function StoryDetail({ story }: StoryDetailProps) {
               {enabledFormFields
                 ?.filter((field) => field.key !== "githubUrl")
                 .map((field) => {
-                  const fieldValue = (story as any)[field.storyPropertyName];
+                  // Fields without a dedicated stories column store their
+                  // value in dynamicFormValues (e.g. radio/multiselect)
+                  const fieldValue =
+                    (story as any)[field.storyPropertyName] ??
+                    story.dynamicFormValues?.find(
+                      (entry: { key: string; value: string }) =>
+                        entry.key === field.key,
+                    )?.value;
                   if (!fieldValue) return null;
 
                   // Get appropriate icon based on field key or type
@@ -2244,8 +2322,11 @@ export function StoryDetail({ story }: StoryDetailProps) {
                 </div>
               )}
 
-              {/* Changelog Link */}
-              <div className="pt-3 border-t border-hairline mt-4">
+              {/* Agent files and changelog */}
+              <div className="pt-3 border-t border-hairline mt-4 space-y-2">
+                {isPublicDirectoryStory(story) && (
+                  <StoryAgentFileLinks slug={story.slug} />
+                )}
                 <a
                   href="#changelog"
                   className="flex items-center gap-2 text-sm text-copy hover:text-ink hover:underline"

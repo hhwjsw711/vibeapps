@@ -4,13 +4,14 @@ import {
   internalQuery,
   internalMutation,
   MutationCtx,
+  QueryCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal, components } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
 import { requirePermission } from "./adminAccess";
-import { getAuthenticatedUserId } from "./users";
+import { getAuthenticatedUserId, getAuthenticatedUserDoc } from "./users";
 import { logActivity } from "./activityLog";
 
 // Spam scans run through their own workpool so batch scans never queue
@@ -24,6 +25,64 @@ const MAX_BULK_ACTION = 50;
 
 // appSettings key holding an admin-customized spam system prompt
 const SPAM_PROMPT_SETTING_KEY = "spamCheckSystemPrompt";
+
+// appSettings keys for the spam automation toggles. All enforced server side
+// so the toggles cannot be bypassed from a client.
+const AUTO_SCAN_KEY = "spamAutoScanEnabled"; // default true
+const AUTO_MARK_KEY = "spamAutoMarkEnabled"; // default false
+const AUTO_MARK_CONFIDENCE_KEY = "spamAutoMarkConfidence"; // default 85
+const AUTO_MARK_NOTIFY_KEY = "spamAutoMarkNotify"; // default true
+
+const AUTO_MARK_DEFAULT_CONFIDENCE = 85;
+const AUTO_MARK_MIN_CONFIDENCE = 50;
+const AUTO_MARK_MAX_CONFIDENCE = 100;
+
+type SpamAutomationSettings = {
+  autoScanEnabled: boolean;
+  autoMarkEnabled: boolean;
+  autoMarkConfidence: number;
+  autoMarkNotify: boolean;
+};
+
+// Read one appSettings row by key
+async function readSettingRow(ctx: QueryCtx | MutationCtx, key: string) {
+  return await ctx.db
+    .query("appSettings")
+    .withIndex("by_key", (q) => q.eq("key", key))
+    .unique();
+}
+
+// Effective automation settings with defaults for unset keys
+async function readAutomationSettings(
+  ctx: QueryCtx | MutationCtx,
+): Promise<SpamAutomationSettings> {
+  const [scan, mark, confidence, notify] = await Promise.all([
+    readSettingRow(ctx, AUTO_SCAN_KEY),
+    readSettingRow(ctx, AUTO_MARK_KEY),
+    readSettingRow(ctx, AUTO_MARK_CONFIDENCE_KEY),
+    readSettingRow(ctx, AUTO_MARK_NOTIFY_KEY),
+  ]);
+  return {
+    autoScanEnabled: scan?.valueBoolean ?? true,
+    autoMarkEnabled: mark?.valueBoolean ?? false,
+    autoMarkConfidence: confidence?.valueNumber ?? AUTO_MARK_DEFAULT_CONFIDENCE,
+    autoMarkNotify: notify?.valueBoolean ?? true,
+  };
+}
+
+// Insert-or-patch one appSettings row
+async function upsertSetting(
+  ctx: MutationCtx,
+  key: string,
+  value: { valueBoolean?: boolean; valueNumber?: number },
+): Promise<void> {
+  const existing = await readSettingRow(ctx, key);
+  if (existing) {
+    await ctx.db.patch(existing._id, value);
+  } else {
+    await ctx.db.insert("appSettings", { key, ...value });
+  }
+}
 
 // Default system prompt for the spam verdict AI. Admins can override it from
 // the AI Spam tab; reset restores this exact text.
@@ -94,6 +153,8 @@ const spamResultValidator = v.object({
   submittedAt: v.number(),
   isHidden: v.boolean(),
   isSpam: v.boolean(),
+  spamMarkedByAgent: v.optional(v.boolean()),
+  reviewRequestedAt: v.optional(v.number()),
   spamReason: v.optional(v.string()),
   status: statusValidator,
   verdict: v.optional(verdictValidator),
@@ -151,13 +212,18 @@ async function upsertAndEnqueue(
   return true;
 }
 
-// Core mark-as-spam logic shared by the single and bulk mutations:
-// hide the story, label it, alert the author in-app, and email them.
+// Core mark-as-spam logic shared by the single, bulk, and agent auto-mark
+// paths: hide the story, label it, and (unless notify is off) alert the
+// author in-app and email them.
 async function markStoryAsSpam(
   ctx: MutationCtx,
   storyId: Id<"stories">,
-  adminUserId: Id<"users">,
   reason: string | undefined,
+  opts: {
+    adminUserId?: Id<"users">; // Absent for agent auto-marks
+    byAgent?: boolean; // True when the automation agent marked it
+    notify?: boolean; // Default true; false marks silently for review
+  },
 ): Promise<boolean> {
   const story = await ctx.db.get(storyId);
   if (!story) return false;
@@ -181,26 +247,30 @@ async function markStoryAsSpam(
     isSpam: true,
     spamReason: effectiveReason,
     spamMarkedAt: Date.now(),
-    spamMarkedBy: adminUserId,
+    spamMarkedBy: opts.adminUserId,
+    spamMarkedByAgent: opts.byAgent === true ? true : undefined,
     isHidden: true,
   });
 
-  // In-app alert for the author (only registered users have alerts)
-  if (story.userId) {
-    await ctx.scheduler.runAfter(0, internal.alerts.createAlert, {
-      recipientUserId: story.userId,
-      actorUserId: undefined,
-      type: "spam" as const,
-      storyId,
-    });
-  }
+  const notify = opts.notify ?? true;
+  if (notify) {
+    // In-app alert for the author (only registered users have alerts)
+    if (story.userId) {
+      await ctx.scheduler.runAfter(0, internal.alerts.createAlert, {
+        recipientUserId: story.userId,
+        actorUserId: undefined,
+        type: "spam" as const,
+        storyId,
+      });
+    }
 
-  // Email notification with the reason and a reply-to back to the admins
-  await ctx.scheduler.runAfter(
-    0,
-    internal.emails.spam.sendSpamNotificationEmail,
-    { storyId, reason: effectiveReason },
-  );
+    // Email notification with the reason and a reply-to back to the admins
+    await ctx.scheduler.runAfter(
+      0,
+      internal.emails.spam.sendSpamNotificationEmail,
+      { storyId, reason: effectiveReason },
+    );
+  }
 
   return true;
 }
@@ -276,6 +346,8 @@ export const listSpamResults = query({
       submittedAt: number;
       isHidden: boolean;
       isSpam: boolean;
+      spamMarkedByAgent?: boolean;
+      reviewRequestedAt?: number;
       spamReason?: string;
       status: "pending" | "running" | "completed" | "failed";
       verdict?: "spam" | "suspicious" | "clean";
@@ -321,6 +393,8 @@ export const listSpamResults = query({
         submittedAt: story._creationTime,
         isHidden: story.isHidden,
         isSpam: story.isSpam === true,
+        spamMarkedByAgent: story.spamMarkedByAgent,
+        reviewRequestedAt: story.spamReviewRequestedAt,
         spamReason: story.spamReason,
         status: row.status,
         verdict: row.verdict,
@@ -369,6 +443,187 @@ export const listSpamResults = query({
     }
 
     return { results: filtered, counts };
+  },
+});
+
+/**
+ * Admin review list: every story currently marked as spam, straight from the
+ * stories table. Unlike listSpamResults this does not depend on a scan row
+ * existing, so nothing marked can hide from this view. Newest marks first.
+ */
+export const listMarkedSpam = query({
+  args: {
+    // Optional range (ms, inclusive) on when the story was marked as spam
+    startDate: v.optional(v.number()),
+    endDate: v.optional(v.number()),
+  },
+  returns: v.array(
+    v.object({
+      storyId: v.id("stories"),
+      storyTitle: v.string(),
+      storySlug: v.string(),
+      storyUrl: v.string(),
+      submitterName: v.optional(v.string()),
+      authorUsername: v.optional(v.string()),
+      submittedAt: v.number(),
+      spamReason: v.optional(v.string()),
+      spamMarkedAt: v.optional(v.number()),
+      markedByName: v.optional(v.string()),
+      markedByAgent: v.optional(v.boolean()),
+      reviewRequestedAt: v.optional(v.number()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requirePermission(ctx, "moderation.view");
+
+    let stories = await ctx.db
+      .query("stories")
+      .withIndex("by_isSpam", (q) => q.eq("isSpam", true))
+      .collect();
+
+    // Server-side date range filter on the mark time (submission time as
+    // a fallback for rows marked before the timestamp existed)
+    if (args.startDate !== undefined) {
+      const start = args.startDate;
+      stories = stories.filter(
+        (s) => (s.spamMarkedAt ?? s._creationTime) >= start,
+      );
+    }
+    if (args.endDate !== undefined) {
+      const end = args.endDate;
+      stories = stories.filter(
+        (s) => (s.spamMarkedAt ?? s._creationTime) <= end,
+      );
+    }
+
+    const rows = await Promise.all(
+      stories.map(async (story) => {
+        let authorUsername: string | undefined;
+        if (story.userId) {
+          const author = await ctx.db.get(story.userId);
+          authorUsername = author?.username;
+        }
+        let markedByName: string | undefined;
+        if (story.spamMarkedBy) {
+          const admin = await ctx.db.get(story.spamMarkedBy);
+          markedByName = admin?.name || admin?.username;
+        }
+        return {
+          storyId: story._id,
+          storyTitle: story.title,
+          storySlug: story.slug,
+          storyUrl: story.url,
+          submitterName: story.submitterName,
+          authorUsername,
+          submittedAt: story._creationTime,
+          spamReason: story.spamReason,
+          spamMarkedAt: story.spamMarkedAt,
+          markedByName,
+          markedByAgent: story.spamMarkedByAgent,
+          reviewRequestedAt: story.spamReviewRequestedAt,
+        };
+      }),
+    );
+
+    // Disputed rows first so review requests never get buried, then most
+    // recently marked; unmarked timestamps fall back to submission time
+    rows.sort((a, b) => {
+      const aDisputed = a.reviewRequestedAt !== undefined ? 1 : 0;
+      const bDisputed = b.reviewRequestedAt !== undefined ? 1 : 0;
+      if (aDisputed !== bDisputed) return bDisputed - aDisputed;
+      return (
+        (b.spamMarkedAt ?? b.submittedAt) - (a.spamMarkedAt ?? a.submittedAt)
+      );
+    });
+    return rows;
+  },
+});
+
+// --- Admin: spam automation settings ---
+
+const automationValidator = v.object({
+  autoScanEnabled: v.boolean(),
+  autoMarkEnabled: v.boolean(),
+  autoMarkConfidence: v.number(),
+  autoMarkNotify: v.boolean(),
+});
+
+/**
+ * Effective spam automation settings for the admin UI.
+ */
+export const getSpamAutomation = query({
+  args: {},
+  returns: automationValidator,
+  handler: async (ctx) => {
+    await requirePermission(ctx, "moderation.view");
+    return await readAutomationSettings(ctx);
+  },
+});
+
+/**
+ * Update spam automation toggles. Only provided fields change. The
+ * confidence threshold is clamped server side, and every change is logged.
+ */
+export const setSpamAutomation = mutation({
+  args: {
+    autoScanEnabled: v.optional(v.boolean()),
+    autoMarkEnabled: v.optional(v.boolean()),
+    autoMarkConfidence: v.optional(v.number()),
+    autoMarkNotify: v.optional(v.boolean()),
+  },
+  returns: automationValidator,
+  handler: async (ctx, args) => {
+    await requirePermission(ctx, "moderation.moderate");
+
+    if (args.autoMarkConfidence !== undefined) {
+      if (
+        args.autoMarkConfidence < AUTO_MARK_MIN_CONFIDENCE ||
+        args.autoMarkConfidence > AUTO_MARK_MAX_CONFIDENCE
+      ) {
+        throw new Error(
+          `Confidence threshold must be between ${AUTO_MARK_MIN_CONFIDENCE} and ${AUTO_MARK_MAX_CONFIDENCE}`,
+        );
+      }
+    }
+
+    const changes: Array<string> = [];
+    if (args.autoScanEnabled !== undefined) {
+      await upsertSetting(ctx, AUTO_SCAN_KEY, {
+        valueBoolean: args.autoScanEnabled,
+      });
+      changes.push(`auto-scan ${args.autoScanEnabled ? "on" : "off"}`);
+    }
+    if (args.autoMarkEnabled !== undefined) {
+      await upsertSetting(ctx, AUTO_MARK_KEY, {
+        valueBoolean: args.autoMarkEnabled,
+      });
+      changes.push(`auto-mark ${args.autoMarkEnabled ? "on" : "off"}`);
+    }
+    if (args.autoMarkConfidence !== undefined) {
+      await upsertSetting(ctx, AUTO_MARK_CONFIDENCE_KEY, {
+        valueNumber: Math.round(args.autoMarkConfidence),
+      });
+      changes.push(`threshold ${Math.round(args.autoMarkConfidence)}%`);
+    }
+    if (args.autoMarkNotify !== undefined) {
+      await upsertSetting(ctx, AUTO_MARK_NOTIFY_KEY, {
+        valueBoolean: args.autoMarkNotify,
+      });
+      changes.push(
+        `auto-mark notifications ${args.autoMarkNotify ? "on" : "off"}`,
+      );
+    }
+
+    if (changes.length > 0) {
+      await logActivity(ctx, {
+        category: "spam",
+        action: "spam.automationUpdated",
+        message: `Updated spam automation settings: ${changes.join(", ")}`,
+        metadata: { changes },
+      });
+    }
+
+    return await readAutomationSettings(ctx);
   },
 });
 
@@ -562,12 +817,9 @@ export const markAsSpam = mutation({
   handler: async (ctx, args) => {
     await requirePermission(ctx, "moderation.moderate");
     const adminUserId = await getAuthenticatedUserId(ctx);
-    const success = await markStoryAsSpam(
-      ctx,
-      args.storyId,
+    const success = await markStoryAsSpam(ctx, args.storyId, args.reason, {
       adminUserId,
-      args.reason,
-    );
+    });
     if (success) {
       await logActivity(ctx, {
         category: "spam",
@@ -598,12 +850,114 @@ export const unmarkSpam = mutation({
       spamReason: undefined,
       spamMarkedAt: undefined,
       spamMarkedBy: undefined,
+      spamMarkedByAgent: undefined,
+      spamReviewRequestedAt: undefined,
       isHidden: false,
     });
     await logActivity(ctx, {
       category: "spam",
       action: "spam.unmarked",
       message: `Cleared the spam label on "${story.title}"`,
+      targetType: "story",
+      targetId: args.storyId,
+      targetLabel: story.title,
+    });
+    return { success: true };
+  },
+});
+
+// --- Submitter dispute: in-app review requests ---
+
+/**
+ * Story owner disputes a spam mark from the notifications page. Stamps the
+ * story and pings admins through the Activity log, so the dispute does not
+ * depend on email deliverability.
+ */
+export const requestSpamReview = mutation({
+  args: { storyId: v.id("stories") },
+  returns: v.object({
+    status: v.union(
+      v.literal("requested"), // Stamped now (or previously): admins pinged
+      v.literal("notSpam"), // Mark already cleared, nothing to dispute
+      v.literal("gone"), // Story deleted
+    ),
+  }),
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    const story = await ctx.db.get(args.storyId);
+    if (!story) return { status: "gone" as const };
+    // Only the story owner can dispute their own mark
+    if (story.userId !== userId) {
+      throw new Error("You can only request a review of your own submission");
+    }
+    if (story.isSpam !== true) return { status: "notSpam" as const };
+    // Idempotent: one request per mark, repeat clicks change nothing
+    if (story.spamReviewRequestedAt !== undefined) {
+      return { status: "requested" as const };
+    }
+
+    await ctx.db.patch(args.storyId, { spamReviewRequestedAt: Date.now() });
+    await logActivity(ctx, {
+      category: "spam",
+      action: "spam.reviewRequested",
+      message: `Submitter requested a review of the spam mark on "${story.title}"`,
+      targetType: "story",
+      targetId: args.storyId,
+      targetLabel: story.title,
+      metadata: {
+        spamReason: story.spamReason,
+        autoMarked: story.spamMarkedByAgent === true,
+      },
+    });
+    return { status: "requested" as const };
+  },
+});
+
+/**
+ * Owner-scoped spam status for the notifications page button. Returns null
+ * when signed out or when the story is not the caller's, so the alert UI
+ * can quietly skip the button.
+ */
+export const getMySpamStatus = query({
+  args: { storyId: v.id("stories") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      isSpam: v.boolean(),
+      reviewRequestedAt: v.optional(v.number()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const user = await getAuthenticatedUserDoc(ctx);
+    if (!user) return null;
+    const story = await ctx.db.get(args.storyId);
+    if (!story || story.userId !== user._id) return null;
+    return {
+      isSpam: story.isSpam === true,
+      reviewRequestedAt: story.spamReviewRequestedAt,
+    };
+  },
+});
+
+/**
+ * Admin resolves a dispute without unmarking: clears the request flag while
+ * keeping the spam label, so the badge stops flagging the row.
+ */
+export const dismissSpamReviewRequest = mutation({
+  args: { storyId: v.id("stories") },
+  returns: v.object({ success: v.boolean() }),
+  handler: async (ctx, args) => {
+    await requirePermission(ctx, "moderation.moderate");
+    const story = await ctx.db.get(args.storyId);
+    if (!story) throw new Error("Story not found");
+    // Idempotent: nothing pending means nothing to dismiss
+    if (story.spamReviewRequestedAt === undefined) return { success: true };
+
+    await ctx.db.patch(args.storyId, { spamReviewRequestedAt: undefined });
+    await logActivity(ctx, {
+      category: "spam",
+      action: "spam.reviewDismissed",
+      message: `Dismissed the review request on "${story.title}" (spam mark kept)`,
       targetType: "story",
       targetId: args.storyId,
       targetLabel: story.title,
@@ -629,12 +983,9 @@ export const bulkMarkAsSpam = mutation({
     const adminUserId = await getAuthenticatedUserId(ctx);
     let marked = 0;
     for (const storyId of args.storyIds) {
-      const success = await markStoryAsSpam(
-        ctx,
-        storyId,
+      const success = await markStoryAsSpam(ctx, storyId, args.reason, {
         adminUserId,
-        args.reason,
-      );
+      });
       if (success) marked++;
     }
     if (marked > 0) {
@@ -776,6 +1127,10 @@ export const autoScanStory = internalMutation({
   handler: async (ctx, args) => {
     const story = await ctx.db.get(args.storyId);
     if (!story) return null;
+    // Admin toggle: auto-scan on new submissions can be paused without
+    // touching the submit mutations that schedule this.
+    const settings = await readAutomationSettings(ctx);
+    if (!settings.autoScanEnabled) return null;
     await upsertAndEnqueue(ctx, args.storyId, "auto");
     return null;
   },
@@ -894,6 +1249,50 @@ export const saveResult = internalMutation({
         error: undefined,
         checkedAt: Date.now(),
       });
+
+      // Agent auto-mark: only automatic scans on new submissions qualify
+      // (never manual or batch scans, so re-scanning old content can't
+      // mass-hide it), and only spam verdicts at or above the threshold.
+      if (
+        args.outcome.verdict === "spam" &&
+        result.triggeredBy === "auto"
+      ) {
+        const settings = await readAutomationSettings(ctx);
+        if (
+          settings.autoMarkEnabled &&
+          args.outcome.confidence >= settings.autoMarkConfidence
+        ) {
+          const story = await ctx.db.get(result.storyId);
+          if (story && story.isSpam !== true) {
+            const reason =
+              args.outcome.reasons.length > 0
+                ? args.outcome.reasons.join("; ")
+                : undefined;
+            const marked = await markStoryAsSpam(
+              ctx,
+              result.storyId,
+              reason,
+              { byAgent: true, notify: settings.autoMarkNotify },
+            );
+            if (marked) {
+              await logActivity(ctx, {
+                category: "spam",
+                action: "spam.autoMarked",
+                message: `Auto-marked "${story.title}" as spam (${args.outcome.confidence}% confidence)${settings.autoMarkNotify ? "" : ", submitter not notified"}`,
+                actorName: "AI Spam Agent",
+                targetType: "story",
+                targetId: result.storyId,
+                targetLabel: story.title,
+                metadata: {
+                  confidence: args.outcome.confidence,
+                  reasons: args.outcome.reasons,
+                  notified: settings.autoMarkNotify,
+                },
+              });
+            }
+          }
+        }
+      }
     } else {
       await ctx.db.patch(args.resultId, {
         status: "failed" as const,

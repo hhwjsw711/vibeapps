@@ -7,6 +7,253 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Latest Updates
 
+### [Fixed] - 2026-08-14
+
+**Security remediation batch 3: judging passwords, story PII, and session gates**
+
+- Public story lists and detail no longer return submitter email, team emails, rejection/spam fields, customMessage, or changeLog. Pending-story and pending-comment admin queries require `moderation.view`. `listUserStories` is approved and visible only (2026-08-14).
+- Password-protected judging and AI results queries re-check the password on the server. The results pages store the real password in sessionStorage instead of a `"true"` flag. Public judge details omit email.
+- Judge APIs (`getGroupSubmissions`, `updateSubmissionStatus`, notes) require a judge `sessionId`. `registerJudge` re-checks the group password and issues session ids from `crypto.getRandomValues`.
+- Judging group passwords are SHA-256 hex. Existing `btoa` hashes still verify until the password is saved again. The Links event kit can decode legacy hashes only.
+- **Files**: `convex/stories.ts`, `convex/validators.ts`, `convex/users.ts`, `convex/comments.ts`, `convex/judgeScores.ts`, `convex/aiJudge.ts`, `convex/judgingGroupSubmissions.ts`, `convex/judges.ts`, `convex/judgingGroups.ts`, plus the public results, AI results, judging, and Judge Tracking pages. Tracked in `prds/security-review-2026-08-13.md`.
+
+### [Fixed] - 2026-08-13
+
+**Security remediation batch 2: strip email and clerkId from public profile queries**
+
+- Public profile query no longer returns email or Clerk id. Own-profile UI uses a server-computed `isOwnProfile` flag instead of comparing Clerk ids on the client (2026-08-13).
+- Follower and following lists return name, username, and avatar only.
+- Admin Numbers follow rankings now require `numbers.view` and return name, username, and counts only (no email or clerkId).
+- **Files**: `convex/users.ts`, `convex/validators.ts`, `convex/follows.ts`, `convex/adminFollowsQueries.ts`, `src/pages/UserProfilePage.tsx`, `src/components/admin/NumbersView.tsx`. Tracked in `prds/security-review-2026-08-13.md`.
+
+### [Fixed] - 2026-08-13
+
+**Security remediation batch 1: removed admin backdoors and restored an email gate**
+
+- Deleted four leftover `[TEMPORARY]` debug functions from `convex/users.ts` that were callable by anyone with the deployment URL: two that set any user to admin, one that dumped every user's email/username/role, and one that let any signed-in user make themselves admin. None had any caller in the app (2026-08-13).
+- Restored the permission check on `convex/emails/broadcast.ts` `debugUsers` and `searchUsers` (previously commented out, which let any signed-in user read every user's email and Clerk id) and removed the debug logging that wrote user emails into server logs (2026-08-13).
+- **Files**: `convex/users.ts`, `convex/emails/broadcast.ts`. Tracked in `prds/security-review-2026-08-13.md`.
+
+### [Security] - 2026-08-13
+
+**Full-app security review and dependency cleanup**
+
+- Ran a full `/sec-check` across all 341 public Convex functions (auth enforcement, data exposure, integrations). Documented 22 ungated findings, headlined by leftover `[TEMPORARY]` unauthenticated admin-escalation and user PII-dump functions in `convex/users.ts`, commented-out admin checks in `convex/emails/broadcast.ts`, email/clerkId exposure through public profile/follow queries, submitter PII on public story lists, and a client-trusted password bypass on the "validated" judging/AI results queries (2026-08-13).
+- Verified sound: Clerk and Resend webhook signature verification, all schedulers and crons target internal functions, secrets are server-side only, the agent judging HTTP API, and migration gating.
+- **Fixed**: removed the deprecated, unused `@clerk/clerk-sdk-node` dependency and bumped `@auth/core` to `^0.41.3`, reducing `npm audit` from 24 vulnerabilities (2 critical, 16 high) to 2 moderate. The 2 remaining are React Router advisories with no patched 6.x; clearing them needs a breaking React Router 7 upgrade (2026-08-13).
+- **Docs**: `prds/security-review-2026-08-13.md` (findings, verified-OK list, and prioritized remediation plan). Backend findings are review-only; no security code changed yet.
+
+### [Added] - 2026-08-13
+
+**Dropdown field type, modern choice controls, answer counts, and judge answer filter**
+
+- New Dropdown (select) choice field type alongside Radio and Multi-select, available in Admin, Forms, Manage Form Fields and in judging group custom questions; same options editor and the same server-side validation (single value must match the configured options, minimum two options) (2026-08-13).
+- Radio buttons and checkboxes on all submit forms restyled as larger custom controls that follow the site themes (20px, tappable full-width rows with hover and selected states); dropdown fields render with the site's themed select instead of the browser default.
+- Admin field rows for choice fields now show live answer counts: a mini bar per option with its count and a responses total, aggregated from submitted answers in `dynamicFormValues`.
+- Judges can filter a group's submissions by a choice answer: a new "Filter by answer" dropdown in the judging interface lists every field/option pair from dynamic form fields and the group's custom questions, works with multi-select answers, and combines with the existing tag, status, and search filters.
+- **Backend**: `convex/schema.ts`, `convex/storyFormFields.ts` (`getChoiceAnswerCounts`), `convex/judgingGroups.ts`, `convex/submitForms.ts`.
+- **Frontend**: `src/components/ui/ChoiceFieldInput.tsx`, `src/pages/JudgingInterfacePage.tsx`, `src/components/admin/FormFieldManagement.tsx`, `src/components/admin/judging/GroupSubmitPageSection.tsx`, `src/components/admin/judging/groupSection.tsx`, plus placeholder pass-through in the five submit forms.
+- **Docs**: `prds/story-form-choice-fields.md` (follow-up section).
+
+
+### [Added] - 2026-08-13
+
+**Radio and multi-select story form fields**
+
+- Admins can now create Radio (single choice) and Multi-select (checkboxes) questions in Admin, Forms, Manage Form Fields, with an options editor (one option per line, minimum two) alongside the existing text, url, email, and textarea types (2026-08-13).
+- Judging group custom questions gained the same two types with the same options editor, and the existing per-question Required and Shown/Hidden controls apply to them unchanged.
+- Choice fields render everywhere submissions happen: the main submit form, dynamic submit forms, the judging group submit page (both dynamic fields and custom questions), and the YC Hack and Resend forms, via a shared `ChoiceFieldInput` component with native required validation and screen reader labeling.
+- Answers stay plain strings (multi-select stores a comma-joined list in the configured option order), so judge views, CSV exports, and the AI judge keep working without changes. The server validates submitted values against the configured options before saving.
+- Story pages now show answers for admin-added fields stored in `dynamicFormValues` (including choice answers) in the Project Links & Tags sidebar.
+- **Backend**: `convex/schema.ts`, `convex/storyFormFields.ts`, `convex/judgingGroups.ts`, `convex/submitForms.ts`.
+- **Frontend**: `src/components/ui/ChoiceFieldInput.tsx` (new), `src/components/StoryForm.tsx`, `src/components/DynamicSubmitForm.tsx`, `src/components/YCHackForm.tsx`, `src/components/ResendForm.tsx`, `src/pages/JudgingGroupSubmitPage.tsx`, `src/components/admin/FormFieldManagement.tsx`, `src/components/admin/judging/GroupSubmitPageSection.tsx`, `src/components/admin/judging/groupSection.tsx`, `src/components/StoryDetail.tsx`.
+- **Docs**: `prds/story-form-choice-fields.md` (new).
+
+
+### [Added] - 2026-08-13
+
+**In-app spam review requests**
+
+- The spam alert on the notifications page now has a Request review button. Clicking it stamps the submission and logs a `spam.reviewRequested` entry in the admin Activity tab with the submitter as the actor, so disputes no longer depend on email deliverability (2026-08-13).
+- One request per mark: the button flips to a persistent "Review requested" chip, and repeat clicks change nothing. Only the story owner sees the button, and only while the mark stands.
+- Disputed rows show an amber "Review requested" badge in the scan results and the Marked spam review, and sort to the top of the review list. Admins resolve with Unmark (restores the post, clears the request) or a new Dismiss action that keeps the mark and logs `spam.reviewDismissed`.
+- The spam reason email and the alert copy now point at the in-app button alongside the existing reply-to and GitHub issue paths.
+- **Backend**: `convex/schema.ts` (`spamReviewRequestedAt`), `convex/spamCheck.ts` (`requestSpamReview`, `getMySpamStatus`, `dismissSpamReviewRequest`), `convex/emails/spam.ts`.
+- **Frontend**: `src/pages/NotificationsPage.tsx`, `src/components/admin/SpamCheck.tsx`, `src/components/admin/AdminDocs.tsx`.
+- **Docs**: `prds/spam-request-review.md` (new).
+
+
+### [Added] - 2026-08-13
+
+**Spam automation agent with auto-mark on submission**
+
+- New Automation card on the AI Spam admin tab with three server-enforced toggles: auto-scan new submissions (default on, now pausable), agent auto-mark spam (default off), and notify submitter on auto-mark (default on), plus a confidence threshold input (default 85, range 50 to 100) (2026-08-13).
+- With auto-mark on, a new submission whose automatic scan returns a spam verdict at or above the threshold is marked as spam and hidden immediately, in the same transaction that saves the scan. Manual and batch scans never auto-mark, so re-scanning old content cannot mass-hide it.
+- Auto-marked submissions carry a new `spamMarkedByAgent` flag, show an "Auto-marked spam" robot badge in the scan results and the Marked spam review, and log to the Activity tab as "AI Spam Agent" with confidence and reasons. Unmark reverses an auto-mark exactly like a human mark.
+- With notifications off the agent marks silently for later review; on, the usual in-app alert and reason email go out, still behind the global email kill switch and the spam notification type toggle.
+- The Marked spam review gained a filter by marked date (persisted like the other ranges on the tab). Admin Docs AI spam check section rewritten to cover automation and the review flow.
+- **Backend**: `convex/schema.ts` (`spamMarkedByAgent`), `convex/spamCheck.ts` (`getSpamAutomation`, `setSpamAutomation`, auto-mark hook in `saveResult`, auto-scan gate, date args on `listMarkedSpam`).
+- **Frontend**: `src/components/admin/SpamCheck.tsx`, `src/components/admin/AdminDocs.tsx`.
+- **Docs**: `prds/spam-automation-agent.md` (new).
+
+
+### [Added] - 2026-08-13
+
+**Marked spam review with bulk delete**
+
+- New "Marked spam" section on the AI Spam admin tab lists every submission currently marked as spam, read straight from the stories table through a new `by_isSpam` index, so marked stories without a scan result row now show up too (2026-08-13).
+- Each row shows the title, live URL, author, when it was submitted and marked, which admin marked it, and the reason sent to the submitter, with a per-row Unmark action.
+- Select all plus Delete selected permanently removes the chosen submissions and their comments, votes, ratings, bookmarks, scan rows, and images. Deletes run in chunks of 50, so large selections no longer hit the bulk action cap; the scan-results bulk delete uses the same chunked path.
+- **Backend**: `convex/schema.ts` (`by_isSpam` index), `convex/spamCheck.ts` (`listMarkedSpam`).
+- **Frontend**: `src/components/admin/SpamCheck.tsx`.
+- **Docs**: `prds/marked-spam-review-bulk-delete.md` (new).
+
+
+### [Fixed] - 2026-08-13
+
+**Story pages 404 on refresh after per-app markdown launch**
+
+- Netlify redirect placeholders and splats only match whole path segments, so the `/s/:slug.md` and `/s/*.md` proxy rules over-matched and sent plain story URLs like `/s/socialnestapp` to Convex, which returned 404 on refresh (2026-08-13).
+- Per-app markdown moved from `/s/{slug}.md` to `/md/{slug}.md` with a safe `/md/*` proxy rule; `/s/{slug}/llms.txt` is unchanged. Convex keeps the old `/s/{slug}.md` path working on its own host. Sidebar, site `/llms.txt`, `/vibeapps.md`, sitemap, and robots all point at `/md/{slug}.md` now.
+- The `botMeta` edge function now only intercepts single-segment `/s/{slug}` paths for bots, so crawlers fetching `/s/{slug}/llms.txt` reach the file instead of meta HTML.
+- **Files**: `public/_redirects`, `netlify/edge-functions/botMeta.ts`, `convex/siteDirectory.ts`, `convex/http.ts`, `src/components/StoryDetail.tsx`, `public/robots.txt`.
+
+
+### [Added] - 2026-08-13
+
+**Per-submission llms.txt and markdown files**
+
+- Each public app now has live `/s/{slug}/llms.txt` and `/s/{slug}.md` generated from the same approved, visible, not-spam, not-archived rules as the site directory (2026-08-13).
+- The story sidebar lists `llms.txt` and `{slug}.md` above View Change Log. Hidden or unpublished apps do not show the links and the HTTP routes 404.
+- Footer `/llms.txt` and `/vibeapps.md` list those per-app URLs next to each app. The sitemap includes them. Production Netlify proxies `/s/:slug/llms.txt` and `/s/*.md` to Convex.
+- **Backend**: `convex/siteDirectory.ts`, `convex/siteFiles.ts` (`getPublicStoryBySlug`), `convex/http.ts`.
+- **Frontend**: `src/components/StoryDetail.tsx`, `public/_redirects`.
+- **Docs**: `prds/per-submission-llms-and-md.md` (new).
+
+
+### [Added] - 2026-08-13
+
+**Editable judging group URL slug**
+
+- After a judging group exists, admins can change its URL slug from the pencil next to `/judging/{slug}` in the workspace header, or from Settings (2026-08-13).
+- A site-design warning dialog explains that judging, submit, results, AI results, admin, and Agent API links all follow the new slug and that old URLs (including emails already sent) stop working. Save replace-navigates the admin workspace to the new slug and keeps the current section.
+- New delegated Access permission `judging.slug` (destructive, same family as delete). Full Clerk admins always can; delegated users with only `judging.manage` cannot. Uniqueness is enforced, invalid slugs are rejected, and unchanged slugs are a no-op.
+- **Backend**: `convex/adminAccess.ts`, `convex/judgingGroups.ts` (`updateGroupSlug`).
+- **Frontend**: `src/components/admin/judging/GroupSlugEditor.tsx` (new), `src/pages/AdminJudgingGroupPage.tsx`, `src/components/admin/judging/GroupSettingsSection.tsx`, `src/components/admin/AccessManagement.tsx`, `src/components/admin/AdminDocs.tsx`.
+- **Docs**: `prds/judging-group-editable-slug.md` (new).
+
+
+### [Added] - 2026-08-13
+
+**Live llms.txt, vibeapps.md directory, and AEO/SEO extras**
+
+- `/llms.txt` is now a live llmstxt.org index of the site plus every public app (approved, not hidden, not spam, not archived). `/vibeapps.md` is the full markdown directory with title, tagline, live URL, GitHub, tags, and vibes, same idea as the Convex components directory markdown catalog (2026-08-13).
+- Footer links to both files. HTTP routes generate from an indexed query on each request (5 minute browser / 1 hour CDN cache) with a daily `siteFiles` fallback. Production Netlify proxies `/llms.txt`, `/vibeapps.md`, `/robots.txt`, and `/sitemap.xml` to the production Convex site host.
+- Additive discovery only: existing `og:title`, `og:description`, `og:image`, `og:url`, `og:type`, and Twitter card values are unchanged. New JSON-LD (WebSite + Organization on the homepage, SoftwareApplication on story crawler HTML), canonical URL, `og:locale` / image dimensions, AI crawler allow rules, and a sitemap that lists site pages plus every public app URL.
+- **Backend**: `convex/siteDirectory.ts` (new), `convex/siteFiles.ts`, `convex/http.ts`, `convex/crons.ts`, `convex/stories.ts`.
+- **Frontend**: `src/components/Footer.tsx`, `src/components/StoryDetail.tsx`, `index.html`, `public/_redirects`, `public/robots.txt`.
+- **Docs**: `prds/public-directory-llms-and-aeo.md` (new).
+
+
+### [Added] - 2026-08-13
+
+**Wider judging submit page, 16:9 header images, and required tag visibility**
+
+- The single column layout on judging group submit pages is now as wide as the main submit page with the sidebar hidden (max-w-4xl instead of max-w-2xl), so the form and hero get real room (2026-08-13).
+- New header image shape setting per group: Square (1:1) keeps the adjustable pixel size, Wide (16:9) fills the layout width in both the single column hero and the two column sidebar, built for banner art. Existing groups keep the square crop.
+- When a group sets a required tag, a new Shown/Hidden pill under the Required tag picker controls whether submitters see the locked tag on the form (pills, quick select, tag counter). Hidden is display only: the tag is still applied to every submission so entries land in the group, and Tag Management's own hidden flag keeps controlling story cards and tag limits, so the two settings never conflict.
+- **Backend**: `convex/schema.ts`, `convex/judgingGroups.ts` (new `submissionPageImageAspect` and `submissionFormRequiredTagVisible` fields).
+- **Frontend**: `src/pages/JudgingGroupSubmitPage.tsx`, `src/components/admin/judging/GroupSubmitPageSection.tsx`, `src/components/admin/AdminDocs.tsx`.
+- **Docs**: `prds/judging-submit-page-width-and-required-tag-visibility.md` (new).
+
+### [Added] - 2026-08-13
+
+**Judging group activity log with realtime review counts on removal**
+
+- New Activity section in the judging group workspace (below Judge tracking) with a realtime, group-scoped audit trail: submissions added (manual add, tag sync, auto-include, custom submit page) and removed, AI review runs (started, completed, failed, retried, actor "AI Judge"), judge scores, and group setting changes (2026-08-13).
+- Removing a submission from a group now also deletes its AI review result alongside the existing score cleanup, so overview stats, human results rankings, and AI counts all update in realtime through Convex reactive queries; the removal log entry records how many scores were deleted and whether an AI review existed. A re-added submission starts clean and gets picked up by the next AI run.
+- Log entries carry the story slug so rows link straight to the submission. A dropdown shows 30, 60, or 100 entries with a Load more button; Export CSV and Save as .md download the full audit trail (5000 row cap, newest first); Clear (judging.manage) batch-deletes the group's entries after an in-design confirm.
+- Per-group entries live in the same `activityLog` table as the site-wide admin Activity Log (new optional `groupId` field plus `by_groupId` index), so the two views stay in sync automatically; clearing a group's log removes those rows from both. Viewing and exports follow the group's judging.view scope for delegated users.
+- Admin Docs: judging groups section documents the Activity log, exports, clear behavior, and the realtime effect of removals.
+- **Backend**: `convex/schema.ts`, `convex/activityLog.ts`, `convex/judgingGroupSubmissions.ts`, `convex/stories.ts`, `convex/aiJudge.ts`, `convex/judgingGroups.ts`, `convex/judgeScores.ts`.
+- **Frontend**: `src/components/admin/judging/GroupActivitySection.tsx` (new), `src/pages/AdminJudgingGroupPage.tsx`, `src/components/admin/AdminDocs.tsx`.
+- **Docs**: `prds/judging-group-activity-log.md` (new).
+
+### [Added] - 2026-08-12
+
+**Admin form fields flow to every submit form with per-group judging overrides**
+
+- Fields created in Admin, Forms, Manage Form Fields now work everywhere. A new field is available on the main submit form, appears on public dynamic submit forms automatically (even forms created before the field existed), and shows up in every judging group's Submit page section as an override row (2026-08-12).
+- Values for fields without a dedicated database column are no longer dropped: they persist on the submission in a new `dynamicFormValues` list and judges see them in an "Additional Form Fields" card in the judging interface. Known keys (LinkedIn, X, Chef links, harness, model, hackathon log) keep filling their existing columns through a shared resolver.
+- Judging group Submit page controls grew three ways: each admin-managed field can be marked Required/Optional and Shown/Hidden per group (unset falls back to the field's own defaults), the form sections (Hackathon Team Info, Additional Images, Additional link fields) each get a Required pill next to Shown/Hidden with submit-time validation, and per-group custom questions get a Shown/Hidden pill so a question can be paused without deleting it. Custom questions stay scoped to their group and their answers still land in "Additional Answers" for judges.
+- The legacy Custom Forms builder sub-tab in the admin Forms section is hidden (commented out with re-enable instructions); Manage Form Fields is the single field system going forward.
+- Admin Docs: the custom submission page section now documents the field, section, additional-field, and custom-question controls.
+- **Backend**: `convex/schema.ts`, `convex/validators.ts`, `convex/storyFormFields.ts`, `convex/stories.ts`, `convex/submitForms.ts`, `convex/judgingGroups.ts`, `convex/judgingGroupSubmissions.ts`.
+- **Frontend**: `src/components/StoryForm.tsx`, `src/pages/JudgingGroupSubmitPage.tsx`, `src/pages/JudgingInterfacePage.tsx`, `src/components/admin/judging/groupSection.tsx`, `src/components/admin/judging/GroupSubmitPageSection.tsx`, `src/components/admin/AdminDashboard.tsx`, `src/components/admin/AdminDocs.tsx`.
+- **Docs**: `prds/dynamic-form-fields-judging-overrides.md` (new).
+
+### [Changed] - 2026-08-12
+
+**Hackathon.md judging aligned to public-repo-only events**
+
+- The header parser now captures the skill's full fixed header: added the "What it does" field and the "Convex features" label (previously only "Features" was recognized) (2026-08-12).
+- The event badge in admin AI results now works when nothing was pasted: the analysis action parses the repo-fetched hackathon.md header and stores the event on the result row (`aiJudgeResults.hackathonLogEvent`, new optional field). Older rows still fall back to parsing a pasted log.
+- No submission form changes for a public-only event. The built-in hackathonLog paste field stays disabled; the only form setup is making the GitHub URL field required and stating the public-repo rule in the form description.
+- **Backend**: `convex/hackathonLog.ts`, `convex/schema.ts`, `convex/aiJudge.ts`, `convex/aiJudgeAnalysis.ts`.
+
+### [Added] - 2026-08-12
+
+**Single-file hackathon skill: paste hackathon.md at submission**
+
+- The hackathon agent skill now maintains one file, hackathon.md, at the participant's project root. Public repos need nothing new; the AI judge already reads the file from the repo. Private or no-repo teams can now paste the file's contents into the submission form (2026-08-12).
+- New built-in `hackathonLog` textarea form field (ships disabled; an admin enables it per hackathon form) rendered with a monospace font, character counter, and a warning not to paste keys or personal data. Wired through all four submission paths: submit, submitAnonymous, submitDynamic, and submitFormData.
+- Pasted logs are treated as untrusted input: capped at 20,000 characters server side with a readable error over the cap, and known secret shapes (sk-, pk*, ghp*, github_pat*, xox, AKIA, JWTs, Convex deploy keys) are replaced with `[redacted]` before storing. New shared module `convex/hackathonLog.ts` holds the cap, redaction, and header parser.
+- The AI judge injects the pasted log into the same PROJECT LOG FILES prompt section the repo path uses, labeled as pasted and self-reported. When the repo already returned hackathon.md, the repo copy wins and the pasted one is noted as ignored. Submissions without a pasted log produce byte-identical prompts to before.
+- `parseHackathonLogHeader` deterministically extracts the skill's fixed header (event, project, frontend, components, auth, AI models, and more) and powers three recorded-but-never-scored cross-checks stored on `aiJudgeResults.logDiscrepancies`: claimed frontend vs `detectFrontendHosting`, claimed components vs the `convex.config.ts` scan, and claimed auth vs `package.json` dependencies (Clerk, WorkOS, Convex Auth, Better Auth). Deterministic detection keeps driving the frontend weight.
+- Admin AI results show an event badge from the header and an expandable amber discrepancy indicator; nothing new appears in public results. The system prompt now tells the model that hackathon.md is self-reported context and a claim contradicted by facts must never raise a score.
+- **Backend**: `convex/schema.ts`, `convex/hackathonLog.ts` (new), `convex/stories.ts`, `convex/submitForms.ts`, `convex/storyFormFields.ts`, `convex/aiJudge.ts`, `convex/aiJudgeAnalysis.ts`.
+- **Frontend**: `src/components/StoryForm.tsx`, `src/components/DynamicSubmitForm.tsx`, `src/pages/JudgingGroupSubmitPage.tsx`, `src/components/admin/FormFieldManagement.tsx`, `src/components/admin/AIJudgeResults.tsx`.
+- **Docs**: `prds/hackathon-md-single-file-skill.md` (new).
+
+### [Removed] - 2026-08-12
+
+**Hackathon skill API endpoints and admin section**
+
+- Removed the `/api/hackathon/{slug}` HTTP API (openapi.json, rules.json, status, register, check), its registration-code auth and rate limiters, the backing queries and mutations in `convex/hackathon.ts`, and the Hackathon skill admin section in the judging group workspace. The single-file hackathon.md flow replaces all of it (2026-08-12).
+- The `hackathonRegistrations` table and the hackathon fields on `judgingGroups` stay in the schema as deprecated optional fields so existing rows remain valid; nothing reads or writes them anymore. `normalizeProjectUrl` and the per-group duplicate URL guard in `stories.submit` are unchanged.
+- **Backend**: `convex/http.ts`, `convex/hackathon.ts`, `convex/judgingGroups.ts`, `convex/schema.ts`.
+- **Frontend**: `src/components/admin/judging/GroupHackathonSection.tsx` (deleted), `src/pages/AdminJudgingGroupPage.tsx`.
+
+### [Added] - 2026-08-12
+
+**AI judge frontend checker with per-platform hosting weights**
+
+- New Frontend checker preset criterion in the Rubric weights card of the AI judging block, added with an explicit Add button like the components check. The AI judge scores the deployed frontend 1-10 (2026-08-12).
+- Below the frontend checker row, five hosting platform sub-weights: Codex Sites, Convex static hosting, Vercel, Netlify, and Other, each defaulting to 1 and adjustable 0-10. The detected platform's weight multiplies the frontend checker weight in the weighted ranking, so for example Codex Sites can count 5x while Convex static hosting counts 7x.
+- Hosting is detected deterministically during analysis from the live URL host (.chatgpt.site, .convex.site, .vercel.app, .netlify.app), response headers (x-vercel-id, x-nf-request-id, server), and repo signals (.openai/hosting.json, @convex-dev/self-static-hosting, vercel.json, netlify.toml) so custom domains still classify. The result stores platform plus evidence, and weight edits re-rank instantly without re-running reviews.
+- The AI prompt gets a FRONTEND HOSTING CHECK facts section, a dead live URL caps the frontend checker score at 3, and the admin results list shows a hosting platform badge per submission.
+- **Backend**: `convex/schema.ts`, `convex/aiJudge.ts`, `convex/aiJudgeAnalysis.ts`, `convex/judgingGroups.ts`.
+- **Frontend**: `src/components/admin/judging/GroupAiSection.tsx`, `src/components/admin/judging/groupSection.tsx`, `src/components/admin/AIJudgeResults.tsx`.
+- **Docs**: `prds/ai-judge-frontend-checker-hosting-weights.md` (new).
+
+### [Fixed] - 2026-08-12
+
+**Public profiles no longer expose moderation data or rejected stories (GitHub issue 15)**
+
+- `getUserProfileByUsername` spread the raw story document into its public response, sending the submitter's email, rejection reason, spam moderation fields, team member emails, and edit history to any client. Those fields are now stripped before the response is returned (2026-08-12).
+- Stories that were approved and later rejected still appeared on public profiles because moderation never cleared the denormalized `isApproved` flag. The profile query now filters to approved, non-hidden stories by `status`, and `updateStatus` keeps `isApproved` in sync going forward.
+- **Backend**: `convex/users.ts`, `convex/stories.ts`.
+
+### [Fixed] - 2026-08-12
+
+**Removing your last name no longer reverts on refresh (GitHub issue 11)**
+
+- Editing your profile name to a single name appeared to save but reverted on reload: Clerk kept the old last name and the sign-in sync overwrote the Convex name with Clerk's first and last name on every page load (2026-08-12).
+- A new `nameCustomized` flag marks the name as user-managed once edited in-app; `ensureUser` and the Clerk webhook sync skip name overwrites when it is set. The profile page also sends an empty last name to Clerk so it clears when the Clerk instance allows optional last names.
+- **Backend**: `convex/schema.ts`, `convex/users.ts`.
+- **Frontend**: `src/pages/UserProfilePage.tsx`.
+- **Docs**: `prds/fix-github-issues-15-and-11.md` (new).
+
 ### [Added] - 2026-08-12
 
 **Judging group emails to submission owners**

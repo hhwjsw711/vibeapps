@@ -6,14 +6,25 @@ import { resend } from "./sendEmails";
 import { registerRoutes } from "@waynesutton/agent-ready";
 import { RateLimiter, MINUTE } from "@convex-dev/rate-limiter";
 import { sha256Hex } from "./agentJudges";
+import {
+  SITE_ORIGIN,
+  buildLlmsTxt,
+  buildRobotsTxt,
+  buildSitemapXml,
+  buildStoryLlmsTxt,
+  buildStoryMarkdown,
+  buildVibeappsMd,
+  type PublicDirectory,
+  type PublicStoryFile,
+} from "./siteDirectory";
 
 const http = httpRouter();
 
 // Agent Ready component routes (agents.md, llms-full.txt, llms-status, etc.)
-// /llms.txt and /robots.txt are skipped because this app already serves them
-// from the siteFiles table via the routes defined below.
+// /llms.txt, /robots.txt, and /sitemap.xml are skipped because this app
+// serves live directory files from public submissions.
 registerRoutes(http, components.agentReady, {
-  skipRoutes: ["/llms.txt", "/robots.txt"],
+  skipRoutes: ["/llms.txt", "/robots.txt", "/sitemap.xml"],
 });
 
 // Define a route for Clerk webhooks
@@ -94,6 +105,25 @@ function generateStoryHTML(story: {
   const safeDescription = escapeHtml(story.description);
   const safeAuthorName = story.authorName ? escapeHtml(story.authorName) : "";
 
+  const jsonLd = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: story.title,
+    description: story.description,
+    url: canonicalUrl,
+    image: imageUrl,
+    applicationCategory: "DeveloperApplication",
+    operatingSystem: "Web",
+    isPartOf: {
+      "@type": "WebSite",
+      name: siteName,
+      url: "https://vibe.isllm.com",
+    },
+    ...(story.authorName
+      ? { author: { "@type": "Person", name: story.authorName } }
+      : {}),
+  }).replace(/</g, "\\u003c");
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -104,6 +134,8 @@ function generateStoryHTML(story: {
   <title>${safeTitle} | ${siteName}</title>
   <meta name="description" content="${safeDescription}">
   <link rel="canonical" href="${canonicalUrl}">
+  <link rel="alternate" type="text/plain" title="LLMs" href="https://vibe.isllm.com/llms.txt">
+  <link rel="alternate" type="text/markdown" title="Directory" href="https://vibe.isllm.com/vibeapps.md">
   
   <!-- Open Graph -->
   <meta property="og:title" content="${safeTitle} | ${siteName}">
@@ -112,6 +144,10 @@ function generateStoryHTML(story: {
   <meta property="og:url" content="${canonicalUrl}">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="${siteName}">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image:alt" content="${safeTitle}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
@@ -120,6 +156,9 @@ function generateStoryHTML(story: {
   <meta name="twitter:title" content="${safeTitle} | ${siteName}">
   <meta name="twitter:description" content="${safeDescription}">
   <meta name="twitter:image" content="${imageUrl}">
+  <meta name="twitter:image:alt" content="${safeTitle}">
+  
+  <script type="application/ld+json">${jsonLd}</script>
   
   <!-- Redirect to actual app after a brief delay for crawlers -->
   <script>
@@ -209,6 +248,20 @@ function generateSubmissionPageHTML(page: {
   const safeTitle = escapeHtml(page.title);
   const safeDescription = escapeHtml(page.description);
 
+  const jsonLd = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    name: page.title,
+    description: page.description,
+    url: canonicalUrl,
+    image: imageUrl,
+    isPartOf: {
+      "@type": "WebSite",
+      name: siteName,
+      url: "https://vibe.isllm.com",
+    },
+  }).replace(/</g, "\\u003c");
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -219,6 +272,8 @@ function generateSubmissionPageHTML(page: {
   <title>${safeTitle} | ${siteName}</title>
   <meta name="description" content="${safeDescription}">
   <link rel="canonical" href="${canonicalUrl}">
+  <link rel="alternate" type="text/plain" title="LLMs" href="https://vibe.isllm.com/llms.txt">
+  <link rel="alternate" type="text/markdown" title="Directory" href="https://vibe.isllm.com/vibeapps.md">
   
   <!-- Open Graph -->
   <meta property="og:title" content="${safeTitle} | ${siteName}">
@@ -227,6 +282,10 @@ function generateSubmissionPageHTML(page: {
   <meta property="og:url" content="${canonicalUrl}">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="${siteName}">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image:alt" content="${safeTitle}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
@@ -235,6 +294,9 @@ function generateSubmissionPageHTML(page: {
   <meta name="twitter:title" content="${safeTitle} | ${siteName}">
   <meta name="twitter:description" content="${safeDescription}">
   <meta name="twitter:image" content="${imageUrl}">
+  <meta name="twitter:image:alt" content="${safeTitle}">
+  
+  <script type="application/ld+json">${jsonLd}</script>
   
   <!-- Redirect to actual app after a brief delay for crawlers -->
   <script>
@@ -297,23 +359,172 @@ http.route({
   }),
 });
 
-// Export router at bottom after routes are defined
-// New routes for robots.txt and llms.txt
+function discoveryHeaders(contentType: string): Record<string, string> {
+  return {
+    "content-type": contentType,
+    "cache-control":
+      "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+    "access-control-allow-origin": "*",
+    "content-signal": "search=yes, ai-train=yes",
+    link: `<${SITE_ORIGIN}/llms.txt>; rel="describedby"; type="text/plain", <${SITE_ORIGIN}/vibeapps.md>; rel="alternate"; type="text/markdown"`,
+  };
+}
+
+async function serveLiveDirectoryFile(
+  ctx: ActionCtx,
+  kind: "robots" | "llms" | "vibeapps" | "sitemap",
+): Promise<Response> {
+  try {
+    const directory: PublicDirectory = await ctx.runQuery(
+      internal.siteFiles.listPublicDirectory,
+      {},
+    );
+    if (kind === "robots") {
+      return new Response(buildRobotsTxt(SITE_ORIGIN), {
+        status: 200,
+        headers: discoveryHeaders("text/plain; charset=utf-8"),
+      });
+    }
+    if (kind === "llms") {
+      return new Response(buildLlmsTxt(directory, SITE_ORIGIN), {
+        status: 200,
+        headers: discoveryHeaders("text/plain; charset=utf-8"),
+      });
+    }
+    if (kind === "vibeapps") {
+      return new Response(buildVibeappsMd(directory, SITE_ORIGIN), {
+        status: 200,
+        headers: discoveryHeaders("text/markdown; charset=utf-8"),
+      });
+    }
+    return new Response(buildSitemapXml(directory, SITE_ORIGIN), {
+      status: 200,
+      headers: discoveryHeaders("application/xml; charset=utf-8"),
+    });
+  } catch (error) {
+    console.error("Live directory file failed, using cache", error);
+    const key =
+      kind === "robots"
+        ? "robots.txt"
+        : kind === "llms"
+          ? "llms.txt"
+          : kind === "vibeapps"
+            ? "vibeapps.md"
+            : "sitemap.xml";
+    const cached = await ctx.runQuery(internal.siteFiles.getFile, { key });
+    if (cached) {
+      const contentType =
+        kind === "sitemap"
+          ? "application/xml; charset=utf-8"
+          : kind === "vibeapps"
+            ? "text/markdown; charset=utf-8"
+            : "text/plain; charset=utf-8";
+      return new Response(cached, {
+        status: 200,
+        headers: discoveryHeaders(contentType),
+      });
+    }
+    return new Response("User-agent: *\nAllow: /\n", {
+      status: 200,
+      headers: discoveryHeaders("text/plain; charset=utf-8"),
+    });
+  }
+}
+
+// Live discovery files generated from public submissions
 http.route({
   path: "/robots.txt",
   method: "GET",
   handler: httpAction(async (ctx) => {
-    const body = await ctx.runQuery(internal.siteFiles.getFile, {
-      key: "robots.txt",
-    });
-    return new Response(body ?? "User-agent: *\nAllow: /\n", {
-      status: 200,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "cache-control": "public, max-age=300, s-maxage=600",
-      },
-    });
+    return await serveLiveDirectoryFile(ctx, "robots");
   }),
+});
+
+http.route({
+  path: "/llms.txt",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    return await serveLiveDirectoryFile(ctx, "llms");
+  }),
+});
+
+http.route({
+  path: "/vibeapps.md",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    return await serveLiveDirectoryFile(ctx, "vibeapps");
+  }),
+});
+
+http.route({
+  path: "/sitemap.xml",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    return await serveLiveDirectoryFile(ctx, "sitemap");
+  }),
+});
+
+function parseStoryDiscoveryPath(
+  pathname: string,
+): { slug: string; kind: "llms" | "md" } | null {
+  // /md/{slug}.md is the public markdown URL (Netlify can proxy /md/* safely)
+  if (pathname.startsWith("/md/")) {
+    const rest = pathname.slice("/md/".length);
+    if (!rest.endsWith(".md") || rest.includes("/")) return null;
+    const slug = rest.slice(0, -".md".length);
+    if (!slug) return null;
+    return { slug: decodeURIComponent(slug), kind: "md" };
+  }
+  const rest = pathname.replace(/^\/s\//, "");
+  if (rest.endsWith("/llms.txt")) {
+    const slug = rest.slice(0, -"/llms.txt".length);
+    if (!slug || slug.includes("/")) return null;
+    return { slug: decodeURIComponent(slug), kind: "llms" };
+  }
+  // Legacy direct-to-Convex path kept for compatibility
+  if (rest.endsWith(".md") && !rest.includes("/")) {
+    const slug = rest.slice(0, -".md".length);
+    if (!slug) return null;
+    return { slug: decodeURIComponent(slug), kind: "md" };
+  }
+  return null;
+}
+
+const serveStoryDiscoveryFile = httpAction(async (ctx, request) => {
+  const parsed = parseStoryDiscoveryPath(new URL(request.url).pathname);
+  if (!parsed) {
+    return new Response("Not found", { status: 404 });
+  }
+  const story: PublicStoryFile | null = await ctx.runQuery(
+    internal.siteFiles.getPublicStoryBySlug,
+    { slug: parsed.slug },
+  );
+  if (!story) {
+    return new Response("Not found", { status: 404 });
+  }
+  if (parsed.kind === "llms") {
+    return new Response(buildStoryLlmsTxt(story, SITE_ORIGIN), {
+      status: 200,
+      headers: discoveryHeaders("text/plain; charset=utf-8"),
+    });
+  }
+  return new Response(buildStoryMarkdown(story, SITE_ORIGIN), {
+    status: 200,
+    headers: discoveryHeaders("text/markdown; charset=utf-8"),
+  });
+});
+
+// Per-app discovery files: /s/{slug}/llms.txt and /md/{slug}.md
+http.route({
+  pathPrefix: "/s/",
+  method: "GET",
+  handler: serveStoryDiscoveryFile,
+});
+
+http.route({
+  pathPrefix: "/md/",
+  method: "GET",
+  handler: serveStoryDiscoveryFile,
 });
 
 // Resend webhook handler for email events. The component verifies the svix
@@ -325,23 +536,6 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     return await resend.handleResendEventWebhook(ctx, req);
-  }),
-});
-
-http.route({
-  path: "/llms.txt",
-  method: "GET",
-  handler: httpAction(async (ctx) => {
-    const body = await ctx.runQuery(internal.siteFiles.getFile, {
-      key: "llms.txt",
-    });
-    return new Response(body ?? "User-agent: *\nAllow: /\n", {
-      status: 200,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "cache-control": "public, max-age=300, s-maxage=600",
-      },
-    });
   }),
 });
 
@@ -951,522 +1145,6 @@ http.route({
       // Validation failures from the mutation map to 400
       return jsonResponse({ error: message }, 400);
     }
-  }),
-});
-
-// --- Hackathon skill API ---
-//
-// Endpoints the /hackathon agent skill calls. Authenticated with a group
-// registration code (x-hackathon-code header, Bearer token, or ?code=).
-// Submissions still flow through the group submit form at
-// /judging/{slug}/submit; there is no API submit path.
-//
-//   GET  /api/hackathon/{slug}/openapi.json  (public)
-//   GET  /api/hackathon/{slug}/rules.json    (code)
-//   GET  /api/hackathon/{slug}/status?url=   (code)
-//   POST /api/hackathon/{slug}/register      (code in body)
-//   POST /api/hackathon/{slug}/check         (code)
-
-// Reads are per code; the check endpoint fetches external URLs so it gets
-// a much tighter budget.
-const hackathonApiLimiter = new RateLimiter(components.rateLimiter, {
-  hackathonRead: {
-    kind: "token bucket",
-    rate: 60,
-    period: MINUTE,
-    capacity: 60,
-  },
-  hackathonCheck: {
-    kind: "token bucket",
-    rate: 10,
-    period: MINUTE,
-    capacity: 10,
-  },
-});
-
-type HackathonAuthContext = {
-  groupId: Id<"judgingGroups">;
-  groupName: string;
-  groupSlug: string;
-  isActive: boolean;
-  startDate?: number;
-  endDate?: number;
-  code: string;
-};
-
-// Resolve the registration code on a request to a hackathon context.
-// Returns a Response (401/403) when authentication fails.
-async function authenticateHackathon(
-  ctx: ActionCtx,
-  request: Request,
-  slug: string,
-  bodyCode?: string,
-): Promise<HackathonAuthContext | Response> {
-  const url = new URL(request.url);
-  const rawCode =
-    request.headers.get("x-hackathon-code") ||
-    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ||
-    url.searchParams.get("code") ||
-    bodyCode ||
-    null;
-  if (!rawCode) {
-    return jsonResponse(
-      { error: "Missing registration code: send x-hackathon-code or ?code=" },
-      401,
-    );
-  }
-  const context = await ctx.runQuery(internal.hackathon.validateCode, {
-    slug,
-    code: rawCode,
-  });
-  if (!context) {
-    return jsonResponse(
-      {
-        error:
-          "Invalid registration code, or the hackathon skill API is disabled for this group",
-      },
-      403,
-    );
-  }
-  return context;
-}
-
-async function checkHackathonRateLimit(
-  ctx: ActionCtx,
-  name: "hackathonRead" | "hackathonCheck",
-  key: string,
-): Promise<Response | null> {
-  const status = await hackathonApiLimiter.limit(ctx, name, { key });
-  if (!status.ok) {
-    const retryAfterSeconds = Math.max(1, Math.ceil(status.retryAfter / 1000));
-    return jsonResponse({ error: "Rate limit exceeded" }, 429, {
-      "retry-after": String(retryAfterSeconds),
-    });
-  }
-  return null;
-}
-
-// GET with a hard timeout so a hung participant site cannot stall a check
-async function fetchWithTimeout(
-  url: string,
-  timeoutMs: number,
-): Promise<Response | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { "user-agent": "vibeapps-hackathon-check" },
-    });
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// Minimal OpenAPI document so agents can discover the hackathon API shape.
-function buildHackathonOpenApiSpec(slug: string) {
-  const base = `/api/hackathon/${slug}`;
-  const codeAuth = [{ registrationCode: [] as Array<string> }];
-  return {
-    openapi: "3.0.3",
-    info: {
-      title: "Vibe Apps hackathon skill API",
-      version: "1.0.0",
-      description:
-        "Register a hackathon team, fetch event rules, pre-check a project, and track submission status. Authenticate with the x-hackathon-code header (or ?code=). Submissions go through the web form at the submitPath returned by rules.json.",
-    },
-    components: {
-      securitySchemes: {
-        registrationCode: {
-          type: "apiKey",
-          in: "header",
-          name: "x-hackathon-code",
-        },
-      },
-    },
-    paths: {
-      [`${base}/register`]: {
-        post: {
-          summary: "Register a team for this event",
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  required: ["code", "teamName"],
-                  properties: {
-                    code: { type: "string" },
-                    teamName: { type: "string" },
-                    email: { type: "string" },
-                  },
-                },
-              },
-            },
-          },
-          responses: {
-            "200": { description: "Registration confirmed with rules payload" },
-            "403": { description: "Invalid code or skill API disabled" },
-          },
-        },
-      },
-      [`${base}/rules.json`]: {
-        get: {
-          summary: "Event rules, criteria, and AI rubric",
-          security: codeAuth,
-          responses: {
-            "200": { description: "Rules payload with updatedAt and ETag" },
-            "304": { description: "Rules unchanged since If-None-Match" },
-          },
-        },
-      },
-      [`${base}/status`]: {
-        get: {
-          summary: "Submission lifecycle for a project URL",
-          security: codeAuth,
-          parameters: [
-            {
-              name: "url",
-              in: "query",
-              required: true,
-              schema: { type: "string" },
-            },
-          ],
-          responses: { "200": { description: "Status payload" } },
-        },
-      },
-      [`${base}/check`]: {
-        post: {
-          summary: "Deterministic pre-submit check",
-          description:
-            "Live URL check, hackathon.json manifest fetch, duplicate URL detection, and event window check. No scores, nothing stored.",
-          security: codeAuth,
-          requestBody: {
-            required: true,
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  required: ["url"],
-                  properties: { url: { type: "string" } },
-                },
-              },
-            },
-          },
-          responses: {
-            "200": { description: "Pass/warn/fail check list" },
-            "429": { description: "Rate limited; see retry-after header" },
-          },
-        },
-      },
-    },
-  };
-}
-
-// GET dispatcher for hackathon skill reads
-http.route({
-  pathPrefix: "/api/hackathon/",
-  method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const segments = url.pathname
-      .slice("/api/hackathon/".length)
-      .split("/")
-      .filter(Boolean);
-    if (segments.length !== 2) {
-      return jsonResponse({ error: "Not found" }, 404);
-    }
-    const slug = segments[0];
-    const resource = segments[1];
-
-    // Public API documentation, no code required
-    if (resource === "openapi.json") {
-      return jsonResponse(buildHackathonOpenApiSpec(slug));
-    }
-
-    const auth = await authenticateHackathon(ctx, request, slug);
-    if (auth instanceof Response) return auth;
-
-    const limited = await checkHackathonRateLimit(
-      ctx,
-      "hackathonRead",
-      `${auth.groupSlug}:${auth.code}`,
-    );
-    if (limited) return limited;
-
-    if (resource === "rules.json") {
-      const rules = await ctx.runQuery(internal.hackathon.getRules, {
-        groupId: auth.groupId,
-      });
-      if (!rules) {
-        return jsonResponse({ error: "Rules unavailable" }, 404);
-      }
-      // Weak ETag from updatedAt lets the skill poll cheaply
-      const etag = `W/"${rules.updatedAt}"`;
-      if (request.headers.get("if-none-match") === etag) {
-        return new Response(null, { status: 304, headers: { etag } });
-      }
-      return jsonResponse(rules, 200, { etag });
-    }
-
-    if (resource === "status") {
-      const targetUrl = url.searchParams.get("url");
-      if (!targetUrl) {
-        return jsonResponse({ error: "Missing ?url= query parameter" }, 400);
-      }
-      const status = await ctx.runQuery(internal.hackathon.getStatusForUrl, {
-        groupId: auth.groupId,
-        url: targetUrl,
-      });
-      return jsonResponse(status);
-    }
-
-    return jsonResponse({ error: "Not found" }, 404);
-  }),
-});
-
-// POST dispatcher for register and check
-http.route({
-  pathPrefix: "/api/hackathon/",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const segments = url.pathname
-      .slice("/api/hackathon/".length)
-      .split("/")
-      .filter(Boolean);
-    if (segments.length !== 2) {
-      return jsonResponse({ error: "Not found" }, 404);
-    }
-    const slug = segments[0];
-    const resource = segments[1];
-
-    let body: Record<string, unknown> = {};
-    try {
-      const parsed: unknown = await request.json();
-      if (typeof parsed === "object" && parsed !== null) {
-        body = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Empty or invalid body; endpoints validate their own fields below
-    }
-
-    if (resource === "register") {
-      const bodyCode = typeof body.code === "string" ? body.code : undefined;
-      const auth = await authenticateHackathon(ctx, request, slug, bodyCode);
-      if (auth instanceof Response) return auth;
-
-      const limited = await checkHackathonRateLimit(
-        ctx,
-        "hackathonRead",
-        `${auth.groupSlug}:${auth.code}`,
-      );
-      if (limited) return limited;
-
-      const teamName = typeof body.teamName === "string" ? body.teamName : "";
-      if (teamName.trim().length < 2) {
-        return jsonResponse(
-          { error: "Body must include teamName (string, 2+ characters)" },
-          400,
-        );
-      }
-
-      try {
-        const registration = await ctx.runMutation(
-          internal.hackathon.registerTeam,
-          {
-            groupId: auth.groupId,
-            code: auth.code,
-            teamName,
-            email: typeof body.email === "string" ? body.email : undefined,
-          },
-        );
-        const rules = await ctx.runQuery(internal.hackathon.getRules, {
-          groupId: auth.groupId,
-        });
-        return jsonResponse({
-          registered: true,
-          alreadyRegistered: registration.alreadyRegistered,
-          group: { name: auth.groupName, slug: auth.groupSlug },
-          submitUrl: `https://vibe.isllm.com/judging/${auth.groupSlug}/submit`,
-          rules,
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Registration failed";
-        return jsonResponse({ error: message }, 400);
-      }
-    }
-
-    if (resource === "check") {
-      const auth = await authenticateHackathon(ctx, request, slug);
-      if (auth instanceof Response) return auth;
-
-      const limited = await checkHackathonRateLimit(
-        ctx,
-        "hackathonCheck",
-        `${auth.groupSlug}:${auth.code}`,
-      );
-      if (limited) return limited;
-
-      const targetUrl = typeof body.url === "string" ? body.url.trim() : "";
-      if (!targetUrl) {
-        return jsonResponse({ error: "Body must include url (string)" }, 400);
-      }
-      let origin: string;
-      try {
-        origin = new URL(targetUrl).origin;
-      } catch {
-        return jsonResponse({ error: "url must be a valid absolute URL" }, 400);
-      }
-
-      type CheckEntry = {
-        id: string;
-        label: string;
-        status: "pass" | "warn" | "fail";
-        detail: string;
-      };
-      const checks: Array<CheckEntry> = [];
-
-      // 1. Event window: is the group open for submissions right now?
-      const now = Date.now();
-      if (!auth.isActive) {
-        checks.push({
-          id: "event",
-          label: "Event open",
-          status: "fail",
-          detail: "This judging group is not active",
-        });
-      } else if (auth.endDate !== undefined && now > auth.endDate) {
-        checks.push({
-          id: "event",
-          label: "Event open",
-          status: "fail",
-          detail: "The event window has ended",
-        });
-      } else if (auth.startDate !== undefined && now < auth.startDate) {
-        checks.push({
-          id: "event",
-          label: "Event open",
-          status: "warn",
-          detail: "The event window has not started yet",
-        });
-      } else {
-        checks.push({
-          id: "event",
-          label: "Event open",
-          status: "pass",
-          detail: "Group is active and inside the event window",
-        });
-      }
-
-      // 2. Liveness: a bare GET on the project URL must succeed
-      const liveRes = await fetchWithTimeout(targetUrl, 10000);
-      if (!liveRes) {
-        checks.push({
-          id: "liveness",
-          label: "Live app status",
-          status: "fail",
-          detail: "The URL did not respond (network error or timeout)",
-        });
-      } else if (!liveRes.ok) {
-        checks.push({
-          id: "liveness",
-          label: "Live app status",
-          status: "fail",
-          detail: `GET returned ${liveRes.status}`,
-        });
-      } else {
-        checks.push({
-          id: "liveness",
-          label: "Live app status",
-          status: "pass",
-          detail: `GET returned ${liveRes.status}`,
-        });
-      }
-
-      // 3. Manifest: published /hackathon.json parses and looks complete.
-      // A missing manifest is a warning, not a failure: public-repo teams
-      // can skip publishing per the event guide.
-      const manifestRes = await fetchWithTimeout(
-        `${origin}/hackathon.json`,
-        10000,
-      );
-      if (!manifestRes || !manifestRes.ok) {
-        checks.push({
-          id: "manifest",
-          label: "Published manifest",
-          status: "warn",
-          detail: `No hackathon.json at ${origin}/hackathon.json. Required for private or no-repo teams; public-repo teams can skip.`,
-        });
-      } else {
-        try {
-          const manifest: unknown = await manifestRes.json();
-          if (typeof manifest !== "object" || manifest === null) {
-            checks.push({
-              id: "manifest",
-              label: "Published manifest",
-              status: "fail",
-              detail: "hackathon.json is not a JSON object",
-            });
-          } else {
-            const record = manifest as Record<string, unknown>;
-            const missing: Array<string> = [];
-            const hasAny = (keys: Array<string>) =>
-              keys.some((k) => record[k] !== undefined);
-            if (!hasAny(["team", "teamName"])) missing.push("team name");
-            if (!hasAny(["appUrl", "app", "url", "siteUrl"]))
-              missing.push("app URL");
-            if (!hasAny(["packages", "components", "dependencies"]))
-              missing.push("packages/components");
-            checks.push({
-              id: "manifest",
-              label: "Published manifest",
-              status: missing.length > 0 ? "warn" : "pass",
-              detail:
-                missing.length > 0
-                  ? `Manifest parses but is missing: ${missing.join(", ")}`
-                  : "Manifest fetched and parsed",
-            });
-          }
-        } catch {
-          checks.push({
-            id: "manifest",
-            label: "Published manifest",
-            status: "fail",
-            detail: "hackathon.json exists but is not valid JSON",
-          });
-        }
-      }
-
-      // 4. Duplicate: is this URL already submitted to the group?
-      const status = await ctx.runQuery(internal.hackathon.getStatusForUrl, {
-        groupId: auth.groupId,
-        url: targetUrl,
-      });
-      checks.push({
-        id: "duplicate",
-        label: "Duplicate submission",
-        status: status.found ? "warn" : "pass",
-        detail: status.found
-          ? "This URL was already submitted to this event. Submitting it again will be rejected."
-          : "No existing submission with this URL",
-      });
-
-      const failed = checks.filter((c) => c.status === "fail").length;
-      const warned = checks.filter((c) => c.status === "warn").length;
-      return jsonResponse({
-        ok: failed === 0,
-        summary: `${checks.length - failed - warned} passed, ${warned} warnings, ${failed} failed`,
-        checks,
-        submitUrl: `https://vibe.isllm.com/judging/${auth.groupSlug}/submit`,
-      });
-    }
-
-    return jsonResponse({ error: "Not found" }, 404);
   }),
 });
 

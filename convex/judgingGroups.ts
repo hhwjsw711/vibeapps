@@ -24,6 +24,10 @@ const submissionFieldRequirementsValidator = v.object({
   submitterName: v.optional(v.boolean()),
   email: v.optional(v.boolean()),
   tags: v.optional(v.boolean()),
+  // Form sections can also be marked required
+  teamInfo: v.optional(v.boolean()),
+  additionalImages: v.optional(v.boolean()),
+  additionalLinks: v.optional(v.boolean()),
 });
 
 // Validator for admin-selectable visible fields on the custom submission form.
@@ -56,8 +60,23 @@ const submissionCustomQuestionsValidator = v.array(
       v.literal("url"),
       v.literal("email"),
       v.literal("textarea"),
+      v.literal("radio"),
+      v.literal("multiselect"),
+      v.literal("select"),
     ),
+    options: v.optional(v.array(v.string())), // Choices for radio/multiselect/select
     required: v.boolean(),
+    visible: v.optional(v.boolean()), // Unset = shown
+  }),
+);
+
+// Per-group overrides for admin-managed form fields (storyFormFields).
+// Keyed by the field's key; unset entries fall back to the field defaults.
+const submissionDynamicFieldOverridesValidator = v.record(
+  v.string(),
+  v.object({
+    required: v.optional(v.boolean()),
+    visible: v.optional(v.boolean()),
   }),
 );
 
@@ -74,7 +93,9 @@ function generateSlug(name: string): string {
 // Helper function to check if a story should be included in judging
 // Returns true if story is valid for judging (not deleted, hidden, archived, or rejected)
 // Type guard to ensure TypeScript knows story is not null when this returns true
-function isStoryValidForJudging(story: Doc<"stories"> | null): story is Doc<"stories"> {
+function isStoryValidForJudging(
+  story: Doc<"stories"> | null,
+): story is Doc<"stories"> {
   if (!story) return false;
   if (story.isHidden === true) return false;
   if (story.isArchived === true) return false;
@@ -82,18 +103,28 @@ function isStoryValidForJudging(story: Doc<"stories"> | null): story is Doc<"sto
   return true;
 }
 
-// Simple password hashing (for basic protection)
-// In production, consider using a more robust solution
-// Exported so aiJudge.ts can reuse the same scheme for AI results passwords.
-export function hashPassword(password: string): string {
-  // Use TextEncoder for browser-compatible base64 encoding
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
+// SHA-256 hex digest. Older rows used reversible btoa; verifyPassword
+// still accepts those so existing groups keep working until the password
+// is saved again.
+export async function hashPassword(password: string): Promise<string> {
+  const data = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function legacyBtoaHash(password: string): string {
+  const data = new TextEncoder().encode(password);
   return btoa(String.fromCharCode(...data));
 }
 
-export function verifyPassword(password: string, hash: string): boolean {
-  return hashPassword(password) === hash;
+export async function verifyPassword(
+  password: string,
+  hash: string,
+): Promise<boolean> {
+  if ((await hashPassword(password)) === hash) return true;
+  return legacyBtoaHash(password) === hash;
 }
 
 // --- Admin Functions ---
@@ -153,7 +184,10 @@ export const listGroups = query({
               return submission;
             }),
           )
-        ).filter((submission): submission is NonNullable<typeof submission> => submission !== null);
+        ).filter(
+          (submission): submission is NonNullable<typeof submission> =>
+            submission !== null,
+        );
 
         const submissionCount = validSubmissions.length;
 
@@ -233,16 +267,16 @@ export const createGroup = mutation({
 
     // Hash passwords if provided
     const hashedJudgePassword = args.judgePassword
-      ? hashPassword(args.judgePassword)
+      ? await hashPassword(args.judgePassword)
       : undefined;
     const hashedSubmissionPassword = args.submissionPagePassword
-      ? hashPassword(args.submissionPagePassword)
+      ? await hashPassword(args.submissionPagePassword)
       : undefined;
     const hashedResultsPassword = args.resultsPassword
-      ? hashPassword(args.resultsPassword)
+      ? await hashPassword(args.resultsPassword)
       : undefined;
     const hashedAiResultsPassword = args.aiResultsPassword
-      ? hashPassword(args.aiResultsPassword)
+      ? await hashPassword(args.aiResultsPassword)
       : undefined;
 
     const newGroupId = await ctx.db.insert("judgingGroups", {
@@ -278,9 +312,73 @@ export const createGroup = mutation({
       targetType: "judgingGroup",
       targetId: newGroupId,
       targetLabel: args.name,
+      groupId: newGroupId,
     });
 
     return newGroupId;
+  },
+});
+
+// Sanitize a custom slug the same way createGroup derives one from a name.
+function normalizeGroupSlug(raw: string): string {
+  const slug = generateSlug(raw);
+  if (slug.length < 2) {
+    throw new Error(
+      "Slug must be at least 2 characters after cleanup (letters, numbers, hyphens).",
+    );
+  }
+  if (slug.length > 80) {
+    throw new Error("Slug must be 80 characters or fewer.");
+  }
+  return slug;
+}
+
+/**
+ * Change a judging group's URL slug. Public pages, submit links, results,
+ * AI results, the admin workspace, and the Agent API all look up the current
+ * slug, so they follow immediately. Old URLs 404. Gated by judging.slug.
+ */
+export const updateGroupSlug = mutation({
+  args: {
+    groupId: v.id("judgingGroups"),
+    slug: v.string(),
+  },
+  returns: v.object({ slug: v.string() }),
+  handler: async (ctx, args) => {
+    await requireJudgingGroupPermission(ctx, args.groupId, "judging.slug");
+
+    const group = await ctx.db.get(args.groupId);
+    if (!group) {
+      throw new Error("Judging group not found");
+    }
+
+    const slug = normalizeGroupSlug(args.slug);
+    if (slug === group.slug) {
+      return { slug };
+    }
+
+    const existing = await ctx.db
+      .query("judgingGroups")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .first();
+    if (existing && existing._id !== args.groupId) {
+      throw new Error("That URL slug is already used by another judging group.");
+    }
+
+    await ctx.db.patch(args.groupId, { slug });
+
+    await logActivity(ctx, {
+      category: "judging",
+      action: "judgingGroup.slugChanged",
+      message: `Changed judging group slug from "${group.slug}" to "${slug}"`,
+      targetType: "judgingGroup",
+      targetId: args.groupId,
+      targetLabel: group.name,
+      groupId: args.groupId,
+      metadata: { oldSlug: group.slug, newSlug: slug },
+    });
+
+    return { slug };
   },
 });
 
@@ -301,6 +399,9 @@ export const updateGroup = mutation({
     hasCustomSubmissionPage: v.optional(v.boolean()),
     submissionPageImageId: v.optional(v.union(v.id("_storage"), v.null())),
     submissionPageImageSize: v.optional(v.number()),
+    submissionPageImageAspect: v.optional(
+      v.union(v.literal("square"), v.literal("wide")),
+    ),
     submissionPageLayout: v.optional(
       v.union(
         v.literal("two-column"),
@@ -321,15 +422,23 @@ export const updateGroup = mutation({
     submissionFormTitle: v.optional(v.union(v.string(), v.null())),
     submissionFormSubtitle: v.optional(v.union(v.string(), v.null())),
     submissionFormRequiredTagId: v.optional(v.union(v.id("tags"), v.null())),
-    submissionFieldRequirements: v.optional(submissionFieldRequirementsValidator),
+    submissionFormRequiredTagVisible: v.optional(v.boolean()),
+    submissionFieldRequirements: v.optional(
+      submissionFieldRequirementsValidator,
+    ),
     submissionFieldVisibility: v.optional(submissionFieldVisibilityValidator),
     submissionCustomQuestions: v.optional(submissionCustomQuestionsValidator),
+    submissionDynamicFieldOverrides: v.optional(
+      submissionDynamicFieldOverridesValidator,
+    ),
     judgesPerSubmission: v.optional(v.number()),
     // Human judging score scale: 5 or 10 (unset = 10)
     scoreScale: v.optional(v.union(v.literal(5), v.literal(10))),
     // Multi-tag + date range auto-include config (nullable to clear)
     autoIncludeTagIds: v.optional(v.union(v.array(v.id("tags")), v.null())),
-    autoIncludeMatchMode: v.optional(v.union(v.literal("any"), v.literal("all"))),
+    autoIncludeMatchMode: v.optional(
+      v.union(v.literal("any"), v.literal("all")),
+    ),
     autoIncludeStartDate: v.optional(v.union(v.number(), v.null())),
     autoIncludeEndDate: v.optional(v.union(v.number(), v.null())),
     // Event window for the build-timeline check (builtDuringEvent)
@@ -377,6 +486,16 @@ export const updateGroup = mutation({
           throw new Error(`Duplicate custom question key: ${question.key}`);
         }
         seenKeys.add(question.key);
+        if (
+          (question.fieldType === "radio" ||
+            question.fieldType === "multiselect" ||
+            question.fieldType === "select") &&
+          (question.options ?? []).filter((o) => o.trim()).length < 2
+        ) {
+          throw new Error(
+            `Custom question "${question.label}" needs at least 2 options`,
+          );
+        }
       }
     }
     if (args.submissionFieldVisibility?.title === false) {
@@ -387,7 +506,7 @@ export const updateGroup = mutation({
 
     // Build finalUpdates object properly, handling nulls explicitly
     const finalUpdates: any = {};
-    
+
     // Copy non-password fields. Null means "clear this optional field";
     // patching undefined unsets it, while null would fail schema validation.
     Object.keys(updates).forEach((key) => {
@@ -399,7 +518,10 @@ export const updateGroup = mutation({
 
     // Clamp judgesPerSubmission to >= 1
     if (judgesPerSubmission !== undefined) {
-      finalUpdates.judgesPerSubmission = Math.max(1, Math.round(judgesPerSubmission));
+      finalUpdates.judgesPerSubmission = Math.max(
+        1,
+        Math.round(judgesPerSubmission),
+      );
     }
 
     // Auto-include config: null clears (store undefined), otherwise set the value.
@@ -426,21 +548,23 @@ export const updateGroup = mutation({
 
     // Hash passwords if provided, set undefined if null to clear
     if (judgePassword !== undefined) {
-      finalUpdates.judgePassword = judgePassword ? hashPassword(judgePassword) : undefined;
+      finalUpdates.judgePassword = judgePassword
+        ? await hashPassword(judgePassword)
+        : undefined;
     }
     if (submissionPagePassword !== undefined) {
       finalUpdates.submissionPagePassword = submissionPagePassword
-        ? hashPassword(submissionPagePassword)
+        ? await hashPassword(submissionPagePassword)
         : undefined;
     }
     if (resultsPassword !== undefined) {
       finalUpdates.resultsPassword = resultsPassword
-        ? hashPassword(resultsPassword)
+        ? await hashPassword(resultsPassword)
         : undefined;
     }
     if (aiResultsPassword !== undefined) {
       finalUpdates.aiResultsPassword = aiResultsPassword
-        ? hashPassword(aiResultsPassword)
+        ? await hashPassword(aiResultsPassword)
         : undefined;
     }
 
@@ -453,6 +577,7 @@ export const updateGroup = mutation({
       targetType: "judgingGroup",
       targetId: groupId,
       targetLabel: existingGroup?.name,
+      groupId,
       metadata: { fields: Object.keys(finalUpdates) },
     });
 
@@ -462,12 +587,9 @@ export const updateGroup = mutation({
     const newRequiredTagId =
       args.submissionFormRequiredTagId === undefined
         ? previousRequiredTagId
-        : args.submissionFormRequiredTagId ?? undefined;
+        : (args.submissionFormRequiredTagId ?? undefined);
 
-    if (
-      newRequiredTagId &&
-      newRequiredTagId !== previousRequiredTagId
-    ) {
+    if (newRequiredTagId && newRequiredTagId !== previousRequiredTagId) {
       const addedBy = await getAuthenticatedUserId(ctx);
       const stories = await ctx.db.query("stories").collect();
       for (const story of stories) {
@@ -678,6 +800,9 @@ export const getGroupWithDetails = query({
       hasCustomSubmissionPage: v.optional(v.boolean()),
       submissionPageImageId: v.optional(v.id("_storage")),
       submissionPageImageSize: v.optional(v.number()),
+      submissionPageImageAspect: v.optional(
+        v.union(v.literal("square"), v.literal("wide")),
+      ),
       submissionPageLayout: v.optional(
         v.union(
           v.literal("two-column"),
@@ -698,11 +823,19 @@ export const getGroupWithDetails = query({
       submissionFormTitle: v.optional(v.string()),
       submissionFormSubtitle: v.optional(v.string()),
       submissionFormRequiredTagId: v.optional(v.id("tags")),
-      submissionFieldRequirements: v.optional(submissionFieldRequirementsValidator),
+      submissionFormRequiredTagVisible: v.optional(v.boolean()),
+      submissionFieldRequirements: v.optional(
+        submissionFieldRequirementsValidator,
+      ),
       submissionFieldVisibility: v.optional(submissionFieldVisibilityValidator),
       submissionCustomQuestions: v.optional(submissionCustomQuestionsValidator),
+      submissionDynamicFieldOverrides: v.optional(
+        submissionDynamicFieldOverridesValidator,
+      ),
       autoIncludeTagIds: v.optional(v.array(v.id("tags"))),
-      autoIncludeMatchMode: v.optional(v.union(v.literal("any"), v.literal("all"))),
+      autoIncludeMatchMode: v.optional(
+        v.union(v.literal("any"), v.literal("all")),
+      ),
       autoIncludeStartDate: v.optional(v.number()),
       autoIncludeEndDate: v.optional(v.number()),
       judgesPerSubmission: v.number(),
@@ -714,6 +847,9 @@ export const getGroupWithDetails = query({
       hasAiResultsPassword: v.boolean(),
       aiResultsPassword: v.optional(v.string()),
       aiRubricWeights: v.optional(
+        v.array(v.object({ key: v.string(), weight: v.number() })),
+      ),
+      aiFrontendWeights: v.optional(
         v.array(v.object({ key: v.string(), weight: v.number() })),
       ),
       aiCustomCriteria: v.optional(
@@ -729,10 +865,6 @@ export const getGroupWithDetails = query({
       hasCustomAiPrompt: v.boolean(),
       agentScoresAdvisory: v.optional(v.boolean()),
       agentKeysEnabled: v.optional(v.boolean()),
-      hackathonSkillEnabled: v.optional(v.boolean()),
-      hackathonRegistrationCodes: v.optional(v.array(v.string())),
-      hackathonRules: v.optional(v.string()),
-      hackathonRulesUpdatedAt: v.optional(v.number()),
       notificationEmails: v.optional(v.array(v.string())),
       criteria: v.array(
         v.object({
@@ -785,7 +917,10 @@ export const getGroupWithDetails = query({
           return submission;
         }),
       )
-    ).filter((submission): submission is NonNullable<typeof submission> => submission !== null);
+    ).filter(
+      (submission): submission is NonNullable<typeof submission> =>
+        submission !== null,
+    );
 
     const submissionCount = validSubmissions.length;
 
@@ -813,6 +948,7 @@ export const getGroupWithDetails = query({
       hasCustomSubmissionPage: group.hasCustomSubmissionPage,
       submissionPageImageId: group.submissionPageImageId,
       submissionPageImageSize: group.submissionPageImageSize,
+      submissionPageImageAspect: group.submissionPageImageAspect,
       submissionPageLayout: group.submissionPageLayout,
       submissionPageTitle: group.submissionPageTitle,
       submissionPageDescription: group.submissionPageDescription,
@@ -820,9 +956,11 @@ export const getGroupWithDetails = query({
       submissionFormTitle: group.submissionFormTitle,
       submissionFormSubtitle: group.submissionFormSubtitle,
       submissionFormRequiredTagId: group.submissionFormRequiredTagId,
+      submissionFormRequiredTagVisible: group.submissionFormRequiredTagVisible,
       submissionFieldRequirements: group.submissionFieldRequirements,
       submissionFieldVisibility: group.submissionFieldVisibility,
       submissionCustomQuestions: group.submissionCustomQuestions,
+      submissionDynamicFieldOverrides: group.submissionDynamicFieldOverrides,
       autoIncludeTagIds: group.autoIncludeTagIds,
       autoIncludeMatchMode: group.autoIncludeMatchMode,
       autoIncludeStartDate: group.autoIncludeStartDate,
@@ -836,15 +974,12 @@ export const getGroupWithDetails = query({
       hasAiResultsPassword: !!group.aiResultsPassword,
       aiResultsPassword: group.aiResultsPassword,
       aiRubricWeights: group.aiRubricWeights,
+      aiFrontendWeights: group.aiFrontendWeights,
       aiCustomCriteria: group.aiCustomCriteria,
       aiDisabledCriteria: group.aiDisabledCriteria,
       hasCustomAiPrompt: !!group.aiJudgeSystemPrompt,
       agentScoresAdvisory: group.agentScoresAdvisory,
       agentKeysEnabled: group.agentKeysEnabled,
-      hackathonSkillEnabled: group.hackathonSkillEnabled,
-      hackathonRegistrationCodes: group.hackathonRegistrationCodes,
-      hackathonRules: group.hackathonRules,
-      hackathonRulesUpdatedAt: group.hackathonRulesUpdatedAt,
       notificationEmails: group.notificationEmails,
       criteria,
       submissionCount,
@@ -927,7 +1062,7 @@ export const validatePassword = mutation({
       return false;
     }
 
-    return verifyPassword(args.password, storedPassword);
+    return await verifyPassword(args.password, storedPassword);
   },
 });
 
@@ -946,7 +1081,7 @@ export const validateSubmissionPagePassword = mutation({
       return false;
     }
 
-    return verifyPassword(args.password, group.submissionPagePassword);
+    return await verifyPassword(args.password, group.submissionPagePassword);
   },
 });
 
@@ -965,7 +1100,7 @@ export const validateResultsPassword = mutation({
       return false;
     }
 
-    return verifyPassword(args.password, group.resultsPassword);
+    return await verifyPassword(args.password, group.resultsPassword);
   },
 });
 
@@ -1024,6 +1159,9 @@ export const getSubmissionPage = query({
       hasCustomSubmissionPage: v.optional(v.boolean()),
       submissionPageImageUrl: v.optional(v.string()),
       submissionPageImageSize: v.optional(v.number()),
+      submissionPageImageAspect: v.optional(
+        v.union(v.literal("square"), v.literal("wide")),
+      ),
       submissionPageLayout: v.optional(
         v.union(
           v.literal("two-column"),
@@ -1044,9 +1182,15 @@ export const getSubmissionPage = query({
       submissionFormTitle: v.optional(v.string()),
       submissionFormSubtitle: v.optional(v.string()),
       submissionFormRequiredTagId: v.optional(v.id("tags")),
-      submissionFieldRequirements: v.optional(submissionFieldRequirementsValidator),
+      submissionFormRequiredTagVisible: v.optional(v.boolean()),
+      submissionFieldRequirements: v.optional(
+        submissionFieldRequirementsValidator,
+      ),
       submissionFieldVisibility: v.optional(submissionFieldVisibilityValidator),
       submissionCustomQuestions: v.optional(submissionCustomQuestionsValidator),
+      submissionDynamicFieldOverrides: v.optional(
+        submissionDynamicFieldOverridesValidator,
+      ),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1081,6 +1225,7 @@ export const getSubmissionPage = query({
       hasCustomSubmissionPage: group.hasCustomSubmissionPage,
       submissionPageImageUrl,
       submissionPageImageSize: group.submissionPageImageSize,
+      submissionPageImageAspect: group.submissionPageImageAspect,
       submissionPageLayout: group.submissionPageLayout || "two-column", // Default to two-column
       submissionPageTitle: group.submissionPageTitle,
       submissionPageDescription: group.submissionPageDescription,
@@ -1088,9 +1233,11 @@ export const getSubmissionPage = query({
       submissionFormTitle: group.submissionFormTitle,
       submissionFormSubtitle: group.submissionFormSubtitle,
       submissionFormRequiredTagId: group.submissionFormRequiredTagId,
+      submissionFormRequiredTagVisible: group.submissionFormRequiredTagVisible,
       submissionFieldRequirements: group.submissionFieldRequirements,
       submissionFieldVisibility: group.submissionFieldVisibility,
       submissionCustomQuestions: group.submissionCustomQuestions,
+      submissionDynamicFieldOverrides: group.submissionDynamicFieldOverrides,
     };
   },
 });
@@ -1149,12 +1296,12 @@ export const verifyResultsPassword = query({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const group = await ctx.db.get(args.groupId);
-    
+
     if (!group || !group.resultsPassword) {
       return false;
     }
 
-    return verifyPassword(args.password, group.resultsPassword);
+    return await verifyPassword(args.password, group.resultsPassword);
   },
 });
 
@@ -1178,7 +1325,7 @@ export const getPublicResultsInfo = query({
   ),
   handler: async (ctx, args) => {
     const group = await ctx.db.get(args.groupId);
-    
+
     if (!group) {
       return null;
     }

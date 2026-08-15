@@ -60,7 +60,7 @@ Create a group from the Judging tab with **Create Judging Group**. Each group ha
 
 ## Basics
 
-- **Name, description, slug**: the slug drives every URL (\`/judging/your-slug\`, \`/judging/your-slug/results\`).
+- **Name, description, slug**: the slug drives every URL (\`/judging/your-slug\`, \`/judging/your-slug/submit\`, \`/judging/your-slug/results\`). After create, change it with the pencil next to the slug in the workspace header (or Settings). Changing the slug needs the **judging.slug** permission.
 - **Active toggle**: pausing a group blocks new judge scoring without deleting anything. Use the pause and play icons in the group list.
 - **Public or private**: public groups appear in listings; private groups are reachable only by URL.
 
@@ -89,7 +89,7 @@ Opening a group takes you to \`/admin/judging/your-slug\`, a workspace with a se
 | --- | --- | --- |
 | Overview | Live stats, active and public toggles, quick links | judging.view |
 | Links | Real-time ledger of every shareable link with lock status | judging.view |
-| Settings | Name, slug, description, passwords, dates, deletion | judging.manage |
+| Settings | Name, slug (judging.slug to change), description, dates, deletion | judging.manage |
 | Access | Who can manage this group | judging.manage |
 | Criteria | Scoring questions and weights for human judges | judging.manage |
 | Submissions | Add, sync, and remove submissions | judging.manage |
@@ -98,6 +98,19 @@ Opening a group takes you to \`/admin/judging/your-slug\`, a workspace with a se
 | Results | Human judging rankings and exports | judging.results |
 | AI results | AI run dashboard with per-criterion reasoning | judging.ai |
 | Judge tracking | Per-judge activity, score edits, notes | judging.tracking |
+| Activity | Per-group audit log with exports | judging.view |
+
+## The group Activity log
+
+The **Activity** section below Judge tracking is a realtime audit trail scoped to this group. It records:
+
+- submissions **added** (manual add, tag sync, auto-include, and the custom submit page) and **removed**, with a note when the removed submission already had judge scores or an AI review,
+- **AI review runs**: run started with the queued count, one entry per completed or failed review (actor "AI Judge"), and retries,
+- **judge scores** as they come in, plus group setting changes.
+
+Entries link to the submission where one applies. The dropdown switches between showing 30, 60, or 100 entries, and **Load more** pages further back. **Export CSV** and **Save as .md** download the full log (newest first) as an audit file. **Clear** (judging.manage) permanently deletes the group's entries after a confirm; because per-group entries live in the same table as the site-wide Activity Log, clearing removes them there too, so export first if you need a record.
+
+Removing a submission also deletes its judge scores and its AI review result, so overview stats, results rankings, and AI counts update in realtime the moment it happens. A submission added back later starts clean and is picked up by the next AI run.
 
 ## The Links ledger
 
@@ -122,6 +135,10 @@ Every page a group exposes has its own gate:
 - **AI results page** (\`/ai-results\`): open when AI results are public, otherwise asks for the AI results password.
 - **Agent API** (\`/api/judging/your-slug/*\`): needs a valid agent key, and the group's agent API toggle must be on.
 - **Admin workspace**: needs a full admin account or a delegated grant scoped to this group.
+
+## Changing the URL slug
+
+The pencil next to \`/judging/your-slug\` in the workspace header (and the Change slug button in Settings) lets an admin with **judging.slug** pick a new slug. Public pages, the submit form, results, AI results, the admin workspace, and the Agent API all look up the current slug, so they switch immediately. Old URLs 404. Emails already sent still contain the old links. The dialog warns before saving. Full Clerk admins always can; delegated users need the Access tab grant.
 
 ## Deleting a group
 
@@ -172,8 +189,19 @@ Configure **auto-include tags** plus the group's event dates. Apps submitted wit
 Enable **custom submission page** to get a dedicated form at \`/judging/your-slug/submit\`. It can:
 
 - require a **submission password**,
-- use its own **custom form fields** (team name, member count, links, and so on),
 - create the app and link it to the group in one step.
+
+The page supports three layouts (two column, one third, single column). The single column layout is as wide as the main submit page and works with a **header image shape** setting: **Square (1:1)** with an adjustable pixel size, or **Wide (16:9)** which fills the page width, good for banner art.
+
+The **Submit page** section in the group workspace controls exactly what the form asks for:
+
+- **Form fields**: every core field (title, tagline, description, links, screenshot, name, email, tags) can be marked **Required** or **Optional** and **Shown** or **Hidden**. Hidden fields are removed from the form entirely.
+- **Required tag visibility**: when a required tag is set, a **Shown/Hidden** pill controls whether submitters see the locked tag on the form. Hidden only affects the form display; the tag is still applied to every submission so entries land in the group, and the tag's own hidden flag in Tag Management keeps controlling story cards and tag limits, so the two settings never conflict.
+- **Form sections**: the Hackathon Team Info, Additional Images, and Additional link fields sections each get the same Required/Optional and Shown/Hidden pills. A required section must be filled in before the form submits.
+- **Additional form fields**: fields created in **Admin, Forms, Manage Form Fields** appear here automatically. Each one can be overridden per group as Required/Optional and Shown/Hidden. Unset overrides fall back to the field's own defaults. These fields render inside the Additional link fields section, so hiding that section hides all of them.
+- **Custom questions**: extra questions that belong to this group only. Each has a type (text, url, email, textarea) plus Required/Optional and Shown/Hidden pills. Answers are stored with the submission and shown to judges under **Additional Answers**.
+
+Fields added in Manage Form Fields also flow to the main public submit forms, and values without a dedicated column are stored with the submission and shown to judges under **Additional Form Fields**.
 
 Removing a submission from a group also removes its scores in that group. The app itself is untouched.`,
   },
@@ -371,14 +399,25 @@ Toggle **agent scores advisory** per group to collect agent scores without letti
     icon: ShieldAlert,
     content: `# AI spam check
 
-The **AI Spam** tab reviews submissions for spam: dead or parked URLs, link farms, empty repos passed off as products, duplicate mass submissions, and promo pages with no relation to a real app. It flags; a human always confirms. Nothing is hidden or removed until an admin marks it.
+The **AI Spam** tab reviews submissions for spam: dead or parked URLs, link farms, empty repos passed off as products, duplicate mass submissions, and promo pages with no relation to a real app. By default it only flags and a human confirms; the optional **automation agent** can also mark and hide high-confidence spam on its own.
 
 ## When scans run
 
-- **Automatically**: every new submission is scanned right after it is created.
+- **Automatically**: every new submission is scanned right after it is created, while the **Auto-scan new submissions** toggle in the Automation card is on (it is on by default).
 - **Manually**: **Scan recent** queues up to 100 submissions that have not been scanned yet; **Re-scan all recent** re-runs everything. With a **date range** set in the filters row, both buttons pull from that window instead of the most recent.
 
 Scans run in their own background pool, so a batch scan never slows down the AI judge.
+
+## Automation
+
+The **Automation** card controls what happens to new submissions with no admin involved. Changing any toggle needs **moderation.moderate** and every change lands in the **Activity** tab.
+
+- **Auto-scan new submissions** (default on): run the spam scan on every new submission. Turn it off to pause scanning without losing any settings.
+- **Agent auto-mark spam** (default off): when an automatic scan returns a **spam** verdict at or above the **confidence threshold**, the agent marks the submission as spam and hides it immediately. Only automatic scans on fresh submissions qualify; batch and manual re-scans never auto-mark, so re-checking old content can never mass-hide it. Every auto-mark is logged in the Activity tab by the **AI Spam Agent** actor with the confidence and reasons.
+- **Confidence threshold** (default 85, range 50 to 100): higher means fewer, safer auto-marks.
+- **Notify submitter on auto-mark** (default on): send the same in-app alert and reason email a human mark sends. Turned off, the agent marks silently so you can review first and notify (or unmark) after.
+
+Auto-marked rows show an **Auto-marked spam** badge with a robot icon in both the scan results and the Marked spam review. **Unmark** reverses an auto-mark exactly like a human mark.
 
 ## What a scan checks
 
@@ -406,12 +445,31 @@ Each row shows the verdict badge with confidence, submitter, URL and repo status
 Marking a flagged submission (single or bulk, with an optional custom reason):
 
 - **hides** the submission and labels it with the reason,
-- sends the submitter an **in-app alert** saying the post was marked as spam and removed, with a link to the GitHub issues page for appeals,
-- **emails** the submitter the reason. The email has a reply-to pointing at \`ADMIN_EMAIL\` and the same GitHub issues link.
+- sends the submitter an **in-app alert** saying the post was marked as spam and removed, with a **Request review** button and a link to the GitHub issues page for appeals,
+- **emails** the submitter the reason. The email has a reply-to pointing at \`ADMIN_EMAIL\`, mentions the in-app Request review button, and links the same GitHub issues page.
 
 **Unmark** reverses everything: label cleared, submission visible again. Deletion stays a separate explicit action; bulk delete removes the submissions with their comments, votes, ratings, bookmarks, and scan history.
 
 Confirmed spam also shows a red **Spam** badge on the row in the Moderation tab.
+
+## Reviewing marked spam
+
+The **Marked spam** card at the bottom of the tab lists every submission currently marked as spam, read straight from the stories table, so marked submissions without a scan row still show up. Each row shows the title, live URL, author, when it was submitted and marked, who (or which agent) marked it, and the reason sent to the submitter.
+
+- **Filter by marked date** narrows the list to a period (the range persists across visits).
+- **Select all** plus **Delete selected** permanently removes the chosen submissions with their comments, votes, ratings, bookmarks, scan rows, and images. Large selections delete in chunks of 50 automatically.
+- **Unmark** on any row restores the submission, whether a human or the agent marked it.
+
+## Disputes and review requests
+
+Signed-in submitters can push back without email: the spam alert on their notifications page has a **Request review** button. Clicking it logs a **spam.reviewRequested** entry in the **Activity** tab with the submitter as the actor, so disputes show up even if the email bounces. One request per mark; repeat clicks do nothing.
+
+Disputed rows get an amber **Review requested** badge in the scan results and the Marked spam review, and they sort to the top of the review list so they never get buried. Two ways to resolve:
+
+- **Unmark** restores the submission and clears the request (the submitter wins).
+- **Dismiss** keeps the spam mark and clears the request, logging **spam.reviewDismissed** (the mark stands).
+
+Anonymous submissions have no account to alert, so their path stays email reply or GitHub issue.
 
 ## Emails and the kill switch
 
@@ -453,7 +511,7 @@ A user granted the full judging set for one group can manage that event end to e
 - **Moderation**: view, moderate (approve, reject, hide, archive, pin, edit, tags), delete
 - **Tags**: view, manage, delete
 - **Forms**: view, manage, results, delete
-- **Judging** (group scoped): view, manage, results, tracking, ai, delete
+- **Judging** (group scoped): view, manage, results, tracking, ai, emails, slug, delete
 - **Numbers**: view
 - **Users**: view, moderate, reports, delete
 - **Emails**: view, send

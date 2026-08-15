@@ -67,7 +67,7 @@ export const baseStoryValidator = {
     v.array(
       v.object({
         name: v.string(),
-        email: v.string(),
+        email: v.optional(v.string()),
       }),
     ),
   ),
@@ -76,6 +76,16 @@ export const baseStoryValidator = {
   selfReportedModel: v.optional(v.string()),
   // Answers to per-group custom submission questions
   customFormAnswers: v.optional(
+    v.array(
+      v.object({
+        key: v.string(),
+        label: v.string(),
+        value: v.string(),
+      }),
+    ),
+  ),
+  // Values for admin-added form fields without a dedicated stories column
+  dynamicFormValues: v.optional(
     v.array(
       v.object({
         key: v.string(),
@@ -144,8 +154,6 @@ export const userInProfileValidator = v.object({
   _id: v.id("users"),
   _creationTime: v.number(),
   name: v.string(),
-  clerkId: v.string(),
-  email: v.optional(v.string()),
   username: v.optional(v.string()),
   imageUrl: v.optional(v.string()),
   bio: v.optional(v.string()),
@@ -154,8 +162,6 @@ export const userInProfileValidator = v.object({
   bluesky: v.optional(v.string()),
   linkedin: v.optional(v.string()),
   isVerified: v.optional(v.boolean()),
-  // role is not on the user doc in DB currently
-  // isBanned & isPaused are usually admin-facing, but can be included if profile needs it
 });
 
 // Validator for Vote object with story details in profile data
@@ -239,13 +245,19 @@ export type StoryWithDetailsPublic = {
   teamMemberCount?: number;
   teamMembers?: Array<{
     name: string;
-    email: string;
+    email?: string;
   }>;
   // Self-reported AI build attribution (metadata only)
   selfReportedHarness?: string;
   selfReportedModel?: string;
   // Answers to per-group custom submission questions
   customFormAnswers?: Array<{
+    key: string;
+    label: string;
+    value: string;
+  }>;
+  // Values for admin-added form fields without a dedicated stories column
+  dynamicFormValues?: Array<{
     key: string;
     label: string;
     value: string;

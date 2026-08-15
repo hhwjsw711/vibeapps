@@ -14,6 +14,10 @@ import {
   Loader2,
   Github,
   PenLine,
+  Bot,
+  ToggleLeft,
+  ToggleRight,
+  Flag,
 } from "lucide-react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
@@ -42,6 +46,7 @@ type SortBy = "newest" | "oldest" | "confidence";
 // localStorage keys so picked date ranges survive tab switches and reloads
 const SCAN_RANGE_KEY = "adminSpamScanRange";
 const FILTER_RANGE_KEY = "adminSpamFilterRange";
+const MARKED_RANGE_KEY = "adminSpamMarkedRange";
 
 // Read a saved range ({from, to} ms timestamps) back into a DateRange
 function loadSavedRange(key: string): DateRange | undefined {
@@ -161,6 +166,50 @@ function CountPill({
   );
 }
 
+// One automation setting row: label, description, and an on/off toggle
+function AutomationToggle({
+  label,
+  description,
+  enabled,
+  disabled,
+  onToggle,
+}: {
+  label: string;
+  description: string;
+  enabled: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2">
+      <div className="min-w-0">
+        <div className="text-sm text-ink">{label}</div>
+        <p className="text-xs text-soft mt-0.5">{description}</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        aria-label={`${enabled ? "Disable" : "Enable"} ${label}`}
+        onClick={onToggle}
+        disabled={disabled}
+        className={`flex items-center gap-1.5 flex-shrink-0 text-xs font-medium rounded-full px-2 py-1 border transition-colors ${
+          enabled
+            ? "text-green-700 bg-green-50 border-green-200"
+            : "text-soft bg-surface-alt border-hairline"
+        } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:shadow-sm"}`}
+      >
+        {enabled ? (
+          <ToggleRight className="w-4 h-4" />
+        ) : (
+          <ToggleLeft className="w-4 h-4" />
+        )}
+        {enabled ? "On" : "Off"}
+      </button>
+    </div>
+  );
+}
+
 export function SpamCheck() {
   const { can } = useAdminAccess();
   const { showConfirm, DialogComponents } = useDialog();
@@ -175,6 +224,10 @@ export function SpamCheck() {
   const [filterRange, setFilterRangeState] = useState<DateRange | undefined>(
     () => loadSavedRange(FILTER_RANGE_KEY),
   );
+  // Range for the marked-spam review section (filters by marked date)
+  const [markedRange, setMarkedRangeState] = useState<DateRange | undefined>(
+    () => loadSavedRange(MARKED_RANGE_KEY),
+  );
 
   const setScanRange = (range: DateRange | undefined) => {
     persistRange(SCAN_RANGE_KEY, range);
@@ -185,7 +238,17 @@ export function SpamCheck() {
     persistRange(FILTER_RANGE_KEY, range);
     setFilterRangeState(range);
   };
+
+  const setMarkedRange = (range: DateRange | undefined) => {
+    persistRange(MARKED_RANGE_KEY, range);
+    setMarkedRangeState(range);
+  };
   const [selectedIds, setSelectedIds] = useState<Set<Id<"stories">>>(new Set());
+  // Separate selection for the marked-spam review section
+  const [markedSelectedIds, setMarkedSelectedIds] = useState<
+    Set<Id<"stories">>
+  >(new Set());
+  const [showMarkedReview, setShowMarkedReview] = useState(false);
   const [expandedId, setExpandedId] = useState<Id<"spamCheckResults"> | null>(
     null,
   );
@@ -206,6 +269,7 @@ export function SpamCheck() {
   };
 
   const { startMs: filterStartMs, endMs: filterEndMs } = rangeToMs(filterRange);
+  const { startMs: markedStartMs, endMs: markedEndMs } = rangeToMs(markedRange);
 
   const data = useQuery(api.spamCheck.listSpamResults, {
     verdictFilter,
@@ -216,11 +280,28 @@ export function SpamCheck() {
 
   const promptData = useQuery(api.spamCheck.getSpamPrompt, {});
 
+  // Only fetched while the marked-spam review section is open
+  const markedSpam = useQuery(
+    api.spamCheck.listMarkedSpam,
+    showMarkedReview
+      ? { startDate: markedStartMs, endDate: markedEndMs }
+      : "skip",
+  );
+
+  // Automation toggles (auto-scan, agent auto-mark, notify)
+  const automation = useQuery(api.spamCheck.getSpamAutomation, {});
+  const setSpamAutomation = useMutation(api.spamCheck.setSpamAutomation);
+  // Threshold input draft; null while not editing
+  const [confidenceDraft, setConfidenceDraft] = useState<string | null>(null);
+
   const startBatchScan = useMutation(api.spamCheck.startBatchScan);
   const setSpamPrompt = useMutation(api.spamCheck.setSpamPrompt);
   const scanStory = useMutation(api.spamCheck.scanStory);
   const markAsSpam = useMutation(api.spamCheck.markAsSpam);
   const unmarkSpam = useMutation(api.spamCheck.unmarkSpam);
+  const dismissReviewRequest = useMutation(
+    api.spamCheck.dismissSpamReviewRequest,
+  );
   const bulkMarkAsSpam = useMutation(api.spamCheck.bulkMarkAsSpam);
   const bulkHide = useMutation(api.spamCheck.bulkHide);
   const bulkDelete = useMutation(api.spamCheck.bulkDelete);
@@ -249,6 +330,66 @@ export function SpamCheck() {
   };
 
   const clearSelection = () => setSelectedIds(new Set());
+
+  // The backend caps bulk actions at 50 ids per call, so large selections
+  // are deleted in sequential chunks.
+  const deleteInChunks = async (
+    ids: Array<Id<"stories">>,
+  ): Promise<number> => {
+    let total = 0;
+    for (let i = 0; i < ids.length; i += 50) {
+      const { deleted } = await bulkDelete({
+        storyIds: ids.slice(i, i + 50),
+      });
+      total += deleted;
+    }
+    return total;
+  };
+
+  const toggleMarkedSelect = (storyId: Id<"stories">) => {
+    setMarkedSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(storyId)) next.delete(storyId);
+      else next.add(storyId);
+      return next;
+    });
+  };
+
+  const toggleMarkedSelectAll = () => {
+    const rows = markedSpam ?? [];
+    if (markedSelectedIds.size === rows.length) {
+      setMarkedSelectedIds(new Set());
+    } else {
+      setMarkedSelectedIds(new Set(rows.map((r) => r.storyId)));
+    }
+  };
+
+  const handleDeleteMarkedSelected = () => {
+    const ids = Array.from(markedSelectedIds);
+    if (ids.length === 0) return;
+    showConfirm(
+      `Permanently delete ${ids.length} marked submission${ids.length === 1 ? "" : "s"}?`,
+      "This permanently deletes the selected spam submissions along with their comments, votes, ratings, bookmarks, scan results, and images. This cannot be undone.",
+      () => {
+        deleteInChunks(ids)
+          .then((deleted) => {
+            toast.success(
+              `Deleted ${deleted} submission${deleted === 1 ? "" : "s"}`,
+            );
+            setMarkedSelectedIds(new Set());
+          })
+          .catch((error) => {
+            toast.error(
+              error instanceof Error ? error.message : "Failed to delete",
+            );
+          });
+      },
+      {
+        confirmButtonText: "Delete forever",
+        confirmButtonVariant: "destructive",
+      },
+    );
+  };
 
   const handleBatchScan = (rescan: boolean) => {
     const { startMs, endMs } = rangeToMs(scanRange);
@@ -338,8 +479,8 @@ export function SpamCheck() {
       `Permanently delete ${ids.length} submission${ids.length === 1 ? "" : "s"}?`,
       "This permanently deletes the submissions along with their comments, votes, ratings, bookmarks, and images. This cannot be undone.",
       () => {
-        bulkDelete({ storyIds: ids })
-          .then(({ deleted }) => {
+        deleteInChunks(ids)
+          .then((deleted) => {
             toast.success(`Deleted ${deleted} submission${deleted === 1 ? "" : "s"}`);
             clearSelection();
           })
@@ -351,6 +492,43 @@ export function SpamCheck() {
       },
       { confirmButtonText: "Delete forever", confirmButtonVariant: "destructive" },
     );
+  };
+
+  // Flip one automation toggle; the backend logs the change
+  const handleAutomationChange = (
+    change: Partial<{
+      autoScanEnabled: boolean;
+      autoMarkEnabled: boolean;
+      autoMarkConfidence: number;
+      autoMarkNotify: boolean;
+    }>,
+  ) => {
+    setSpamAutomation(change)
+      .then(() => toast.success("Automation settings saved"))
+      .catch((error) => {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to save settings",
+        );
+      });
+  };
+
+  const handleSaveConfidence = () => {
+    if (confidenceDraft === null) return;
+    const parsed = Number(confidenceDraft);
+    if (!Number.isFinite(parsed) || parsed < 50 || parsed > 100) {
+      toast.error("Confidence threshold must be between 50 and 100");
+      return;
+    }
+    setSpamAutomation({ autoMarkConfidence: Math.round(parsed) })
+      .then(() => {
+        toast.success("Confidence threshold saved");
+        setConfidenceDraft(null);
+      })
+      .catch((error) => {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to save threshold",
+        );
+      });
   };
 
   const handleMarkOne = (storyId: Id<"stories">, title: string) => {
@@ -376,7 +554,16 @@ export function SpamCheck() {
       `"${title}" will lose its spam label and become visible again.`,
       () => {
         unmarkSpam({ storyId })
-          .then(() => toast.success("Spam label removed; submission is visible"))
+          .then(() => {
+            toast.success("Spam label removed; submission is visible");
+            // Drop the story from the marked-review selection if present
+            setMarkedSelectedIds((prev) => {
+              if (!prev.has(storyId)) return prev;
+              const next = new Set(prev);
+              next.delete(storyId);
+              return next;
+            });
+          })
           .catch((error) => {
             toast.error(
               error instanceof Error ? error.message : "Failed to unmark",
@@ -384,6 +571,24 @@ export function SpamCheck() {
           });
       },
       { confirmButtonText: "Unmark" },
+    );
+  };
+
+  // Resolve a submitter dispute while keeping the spam label in place
+  const handleDismissReview = (storyId: Id<"stories">, title: string) => {
+    showConfirm(
+      "Dismiss review request?",
+      `The spam mark on "${title}" stays; only the submitter's review request is cleared.`,
+      () => {
+        dismissReviewRequest({ storyId })
+          .then(() => toast.success("Review request dismissed"))
+          .catch((error) => {
+            toast.error(
+              error instanceof Error ? error.message : "Failed to dismiss",
+            );
+          });
+      },
+      { confirmButtonText: "Dismiss" },
     );
   };
 
@@ -519,6 +724,97 @@ export function SpamCheck() {
             Scan checks submissions that have no verdict yet. Re-scan also
             re-checks ones already scanned. Up to 100 per run.
           </p>
+        </div>
+      )}
+
+      {/* Automation: auto-scan and the agent auto-mark pipeline */}
+      {canModerate && (
+        <div className="border border-hairline rounded-lg bg-surface p-4 space-y-1">
+          <div className="flex items-center gap-2">
+            <Bot className="w-4 h-4 text-copy" />
+            <h3 className="text-sm font-medium text-ink">Automation</h3>
+          </div>
+          <p className="text-xs text-soft">
+            What happens to new submissions without an admin touching anything.
+            Batch and manual scans never auto-mark; only automatic scans on
+            fresh submissions do.
+          </p>
+          {automation === undefined ? (
+            <div className="text-sm text-soft py-4 text-center">
+              Loading automation settings...
+            </div>
+          ) : (
+            <div className="divide-y divide-hairline">
+              <AutomationToggle
+                label="Auto-scan new submissions"
+                description="Run the AI spam scan on every new submission right after it is created."
+                enabled={automation.autoScanEnabled}
+                onToggle={() =>
+                  handleAutomationChange({
+                    autoScanEnabled: !automation.autoScanEnabled,
+                  })
+                }
+              />
+              <AutomationToggle
+                label="Agent auto-mark spam"
+                description={`When an automatic scan returns a spam verdict at or above ${automation.autoMarkConfidence}% confidence, the agent marks the submission as spam and hides it immediately. Unmark reverses it, same as a human mark.`}
+                enabled={automation.autoMarkEnabled}
+                disabled={!automation.autoScanEnabled}
+                onToggle={() => {
+                  if (automation.autoMarkEnabled) {
+                    handleAutomationChange({ autoMarkEnabled: false });
+                    return;
+                  }
+                  showConfirm(
+                    "Turn on agent auto-mark?",
+                    `New submissions that scan as spam with ${automation.autoMarkConfidence}% confidence or higher will be marked and hidden automatically, without waiting for an admin. Every auto-mark is logged in the Activity tab and can be reversed with Unmark.`,
+                    () => handleAutomationChange({ autoMarkEnabled: true }),
+                    { confirmButtonText: "Turn on" },
+                  );
+                }}
+              />
+              {automation.autoMarkEnabled && (
+                <div className="flex flex-wrap items-center gap-2 py-2">
+                  <label
+                    htmlFor="spam-auto-mark-confidence"
+                    className="text-sm text-ink"
+                  >
+                    Confidence threshold
+                  </label>
+                  <Input
+                    id="spam-auto-mark-confidence"
+                    type="number"
+                    min={50}
+                    max={100}
+                    value={confidenceDraft ?? String(automation.autoMarkConfidence)}
+                    onChange={(e) => setConfidenceDraft(e.target.value)}
+                    className="h-8 w-20 text-sm bg-surface"
+                  />
+                  <span className="text-xs text-soft">%</span>
+                  {confidenceDraft !== null &&
+                    confidenceDraft !== String(automation.autoMarkConfidence) && (
+                      <Button size="sm" onClick={handleSaveConfidence}>
+                        Save
+                      </Button>
+                    )}
+                  <span className="text-xs text-faint">
+                    50 to 100. Higher means fewer, safer auto-marks.
+                  </span>
+                </div>
+              )}
+              <AutomationToggle
+                label="Notify submitter on auto-mark"
+                description="Send the in-app alert and reason email when the agent marks something. Off means the agent marks silently and you notify (or unmark) after review."
+                enabled={automation.autoMarkNotify}
+                disabled={!automation.autoMarkEnabled}
+                onToggle={() =>
+                  handleAutomationChange({
+                    autoMarkNotify: !automation.autoMarkNotify,
+                  })
+                }
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -785,8 +1081,19 @@ export function SpamCheck() {
                         confidence={result.confidence}
                       />
                       {result.isSpam && (
-                        <span className="text-xs font-medium text-white bg-red-600 rounded-full px-2 py-0.5">
-                          Marked spam
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-white bg-red-600 rounded-full px-2 py-0.5">
+                          {result.spamMarkedByAgent && (
+                            <Bot className="w-3 h-3" />
+                          )}
+                          {result.spamMarkedByAgent
+                            ? "Auto-marked spam"
+                            : "Marked spam"}
+                        </span>
+                      )}
+                      {result.reviewRequestedAt !== undefined && (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5">
+                          <Flag className="w-3 h-3" />
+                          Review requested
                         </span>
                       )}
                       {result.isHidden && !result.isSpam && (
@@ -994,6 +1301,220 @@ export function SpamCheck() {
           })}
         </div>
       )}
+
+      {/* Step 3: review everything marked as spam and permanently delete it */}
+      <div className="border border-hairline rounded-lg bg-surface p-4 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-medium text-ink">Marked spam</h3>
+            <p className="text-xs text-soft mt-0.5">
+              Every submission currently marked as spam, even ones without a
+              scan result. Review the list, select what to remove, and delete
+              for good.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowMarkedReview((prev) => !prev)}
+          >
+            {showMarkedReview ? (
+              <ChevronUp className="w-4 h-4 mr-1" />
+            ) : (
+              <ChevronDown className="w-4 h-4 mr-1" />
+            )}
+            {showMarkedReview ? "Hide" : "Review marked spam"}
+          </Button>
+        </div>
+
+        {showMarkedReview &&
+          (markedSpam === undefined ? (
+            <div className="text-sm text-soft py-6 text-center">
+              Loading marked spam...
+            </div>
+          ) : markedSpam.length === 0 ? (
+            <div className="text-sm text-soft py-6 text-center border border-dashed border-hairline rounded-lg space-y-2">
+              <div>
+                {markedRange?.from
+                  ? "Nothing was marked as spam in this date range."
+                  : "Nothing is marked as spam right now."}
+              </div>
+              {markedRange?.from && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setMarkedRange(undefined)}
+                >
+                  Clear date filter
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {/* Section toolbar: marked-date filter + select all + delete selected */}
+              <div className="flex flex-wrap items-center gap-2">
+                <DateRangePicker
+                  value={markedRange}
+                  onChange={setMarkedRange}
+                  placeholder="Filter by marked date"
+                />
+                <label className="flex items-center gap-2 text-sm text-soft cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={
+                      markedSelectedIds.size === markedSpam.length &&
+                      markedSpam.length > 0
+                    }
+                    onChange={toggleMarkedSelectAll}
+                    className="rounded border-hairline-strong"
+                  />
+                  Select all ({markedSpam.length})
+                </label>
+                {markedSelectedIds.size > 0 && (
+                  <>
+                    <span className="text-sm font-medium text-ink">
+                      {markedSelectedIds.size} selected
+                    </span>
+                    {canDelete && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={handleDeleteMarkedSelected}
+                      >
+                        <Trash2 className="w-4 h-4 mr-1" />
+                        Delete selected
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setMarkedSelectedIds(new Set())}
+                    >
+                      Clear
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              {/* Marked spam rows */}
+              {markedSpam.map((row) => (
+                <div
+                  key={row.storyId}
+                  className="flex items-start gap-3 p-3 border border-red-200 rounded-lg bg-surface"
+                >
+                  <input
+                    type="checkbox"
+                    checked={markedSelectedIds.has(row.storyId)}
+                    onChange={() => toggleMarkedSelect(row.storyId)}
+                    className="mt-1 rounded border-hairline-strong"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link
+                        to={`/s/${row.storySlug}`}
+                        className="text-sm font-medium text-ink hover:underline truncate"
+                      >
+                        {row.storyTitle}
+                      </Link>
+                      <a
+                        href={row.storyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-soft hover:underline"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        URL
+                      </a>
+                      {row.markedByAgent && (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-white bg-red-600 rounded-full px-2 py-0.5">
+                          <Bot className="w-3 h-3" />
+                          Auto-marked
+                        </span>
+                      )}
+                      {row.reviewRequestedAt !== undefined && (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5">
+                          <Flag className="w-3 h-3" />
+                          Review requested{" "}
+                          {formatDistanceToNow(row.reviewRequestedAt, {
+                            addSuffix: true,
+                          })}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-soft">
+                      <span>
+                        by{" "}
+                        {row.authorUsername ? (
+                          <Link
+                            to={`/${row.authorUsername}`}
+                            className="hover:underline"
+                          >
+                            {row.submitterName || row.authorUsername}
+                          </Link>
+                        ) : (
+                          (row.submitterName || "anonymous")
+                        )}
+                      </span>
+                      <span>
+                        submitted{" "}
+                        {formatDistanceToNow(row.submittedAt, {
+                          addSuffix: true,
+                        })}
+                      </span>
+                      {row.spamMarkedAt && (
+                        <span>
+                          marked{" "}
+                          {formatDistanceToNow(row.spamMarkedAt, {
+                            addSuffix: true,
+                          })}
+                          {row.markedByName
+                            ? ` by ${row.markedByName}`
+                            : row.markedByAgent
+                              ? " by AI Spam Agent"
+                              : ""}
+                        </span>
+                      )}
+                    </div>
+                    {row.spamReason && (
+                      <div className="mt-1 text-xs text-soft">
+                        {row.spamReason}
+                      </div>
+                    )}
+                  </div>
+                  {canModerate && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {row.reviewRequestedAt !== undefined && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() =>
+                            handleDismissReview(row.storyId, row.storyTitle)
+                          }
+                        >
+                          <Flag className="w-3.5 h-3.5 mr-1" />
+                          Dismiss
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() =>
+                          handleUnmarkOne(row.storyId, row.storyTitle)
+                        }
+                      >
+                        <Undo2 className="w-3.5 h-3.5 mr-1" />
+                        Unmark
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
 
       <DialogComponents />
     </div>

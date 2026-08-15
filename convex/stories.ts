@@ -17,8 +17,16 @@ import {
   storyWithDetailsValidator,
   StoryWithDetailsPublic,
 } from "./validators"; // Import StoryWithDetailsPublic
-import { syncStoryToTaggedGroups } from "./judgingGroupSubmissions"; // Auto-include tag-matched submissions in judging
+import {
+  syncStoryToTaggedGroups,
+  ensureStoryInGroup,
+} from "./judgingGroupSubmissions"; // Auto-include tag-matched submissions in judging
 import { groupHasDuplicateUrl } from "./hackathon"; // Per-group duplicate project URL guard
+import { sanitizeHackathonLog } from "./hackathonLog"; // Cap + secret redaction for pasted hackathon.md
+import {
+  resolveDynamicFieldValues,
+  resolveDynamicFieldRecord,
+} from "./storyFormFields"; // Generic mapping for admin-added form fields
 
 // Validator for Doc<"tags">
 // REMOVED - Moved to convex/validators.ts
@@ -56,11 +64,35 @@ export type StoryWithDetails = Doc<"stories"> & {
   votesCount: number;
 };
 
+function omitPublicStoryPii(story: StoryWithDetails): StoryWithDetails {
+  const {
+    email: _email,
+    authorEmail: _authorEmail,
+    rejectionReason: _rejectionReason,
+    customMessage: _customMessage,
+    isSpam: _isSpam,
+    spamReason: _spamReason,
+    spamMarkedAt: _spamMarkedAt,
+    spamMarkedBy: _spamMarkedBy,
+    spamMarkedByAgent: _spamMarkedByAgent,
+    spamReviewRequestedAt: _spamReviewRequestedAt,
+    changeLog: _changeLog,
+    teamMembers,
+    ...rest
+  } = story;
+  return {
+    ...rest,
+    teamMembers: teamMembers?.map((member) => ({ name: member.name })),
+  } as StoryWithDetails;
+}
+
 // Helper to fetch tags and related counts for stories
 const fetchTagsAndCountsForStories = async (
   ctx: { db: GenericDatabaseReader<DataModel>; storage: StorageReader },
   stories: Doc<"stories">[],
+  options?: { stripPii?: boolean },
 ): Promise<StoryWithDetails[]> => {
+  const stripPii = options?.stripPii !== false;
   const allTagIds = stories.flatMap((story) => story.tagIds || []);
   const uniqueTagIds = [...new Set(allTagIds)];
 
@@ -168,7 +200,7 @@ const fetchTagsAndCountsForStories = async (
 
       const author = story.userId ? usersMap.get(story.userId) : undefined;
 
-      return {
+      const detailed: StoryWithDetails = {
         ...story,
         voteScore,
         screenshotUrl,
@@ -178,10 +210,11 @@ const fetchTagsAndCountsForStories = async (
         authorName: author?.name,
         authorUsername: author?.username,
         authorImageUrl: author?.imageUrl,
-        authorEmail: author?.email,
+        authorEmail: stripPii ? undefined : author?.email,
         averageRating,
         votesCount,
       };
+      return stripPii ? omitPublicStoryPii(detailed) : detailed;
     }),
   );
 };
@@ -250,11 +283,13 @@ export const listApproved = query({
 
     if (args.searchTerm && args.searchTerm.trim() !== "") {
       // Use full text search
-      const query = ctx.db.query("stories").withSearchIndex("search_all", (q) => {
-        let builder = q.search("title", args.searchTerm!);
-        builder = builder.eq("status", "approved").eq("isHidden", false);
-        return builder;
-      });
+      const query = ctx.db
+        .query("stories")
+        .withSearchIndex("search_all", (q) => {
+          let builder = q.search("title", args.searchTerm!);
+          builder = builder.eq("status", "approved").eq("isHidden", false);
+          return builder;
+        });
       const stories = await query.collect();
       const storiesWithDetails = await fetchTagsAndCountsForStories(
         ctx,
@@ -401,6 +436,7 @@ export const listPending = query({
     isDone: boolean;
     continueCursor: string;
   }> => {
+    await requirePermission(ctx, "moderation.view");
     const query = ctx.db
       .query("stories")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
@@ -410,6 +446,7 @@ export const listPending = query({
     const storiesWithDetails = await fetchTagsAndCountsForStories(
       ctx,
       paginatedStories.page,
+      { stripPii: false },
     );
 
     return {
@@ -468,20 +505,15 @@ export const getBySlug = query({
       status: storyWithDetails.status,
       isHidden: storyWithDetails.isHidden,
       isPinned: storyWithDetails.isPinned,
-      customMessage: storyWithDetails.customMessage,
       isApproved: storyWithDetails.isApproved,
-      email: storyWithDetails.email,
-      // Hackathon team info
+      // Hackathon team info (names only on public pages)
       teamName: storyWithDetails.teamName,
       teamMemberCount: storyWithDetails.teamMemberCount,
       teamMembers: storyWithDetails.teamMembers,
-      // Changelog for edit tracking
-      changeLog: storyWithDetails.changeLog,
       // Mapped fields
       authorName: storyWithDetails.authorName,
       authorUsername: storyWithDetails.authorUsername,
       authorImageUrl: storyWithDetails.authorImageUrl,
-      authorEmail: storyWithDetails.authorEmail,
       tags: storyWithDetails.tags,
       screenshotUrl: storyWithDetails.screenshotUrl,
       additionalImageUrls: storyWithDetails.additionalImageUrls,
@@ -596,10 +628,23 @@ export const submit = mutation({
     // Self-reported AI build attribution (unverified metadata, never scored)
     selfReportedHarness: v.optional(v.string()),
     selfReportedModel: v.optional(v.string()),
+    // Pasted hackathon.md for private/no-repo submissions (capped + redacted)
+    hackathonLog: v.optional(v.string()),
     // Auto-add to judging group
     judgingGroupId: v.optional(v.id("judgingGroups")),
     // Answers to per-group custom submission questions
     customFormAnswers: v.optional(
+      v.array(
+        v.object({
+          key: v.string(),
+          label: v.string(),
+          value: v.string(),
+        }),
+      ),
+    ),
+    // Values for admin-added Manage Form Fields entries. Known keys map to
+    // their stories column, everything else lands in dynamicFormValues.
+    dynamicFieldValues: v.optional(
       v.array(
         v.object({
           key: v.string(),
@@ -705,6 +750,12 @@ export const submit = mutation({
     // Hidden tags (custom form tracking tags) do not count toward the limit
     enforceVisibleTagLimit(resolvedTagDocs, maxTagsPerSubmission);
 
+    // Map admin-added form field values: known keys fill their stories
+    // column (unless the dedicated arg already did), the rest persist
+    // generically in dynamicFormValues.
+    const { dynamicColumns, dynamicFormValues } =
+      await resolveDynamicFieldValues(ctx, args.dynamicFieldValues);
+
     const storyId = await ctx.db.insert("stories", {
       title: args.title,
       slug: slug,
@@ -721,11 +772,11 @@ export const submit = mutation({
       ratingSum: 0,
       ratingCount: 0,
       videoUrl: args.videoUrl,
-      linkedinUrl: args.linkedinUrl,
-      twitterUrl: args.twitterUrl,
-      githubUrl: args.githubUrl,
-      chefShowUrl: args.chefShowUrl,
-      chefAppUrl: args.chefAppUrl,
+      linkedinUrl: args.linkedinUrl ?? dynamicColumns.linkedinUrl,
+      twitterUrl: args.twitterUrl ?? dynamicColumns.twitterUrl,
+      githubUrl: args.githubUrl ?? dynamicColumns.githubUrl,
+      chefShowUrl: args.chefShowUrl ?? dynamicColumns.chefShowUrl,
+      chefAppUrl: args.chefAppUrl ?? dynamicColumns.chefAppUrl,
       status: "approved",
       isHidden: false,
       isPinned: false,
@@ -737,8 +788,19 @@ export const submit = mutation({
       teamMemberCount: args.teamMemberCount,
       teamMembers: args.teamMembers,
       // Self-reported AI build attribution (unverified metadata, never scored)
-      selfReportedHarness: args.selfReportedHarness?.trim() || undefined,
-      selfReportedModel: args.selfReportedModel?.trim() || undefined,
+      selfReportedHarness:
+        args.selfReportedHarness?.trim() ||
+        dynamicColumns.selfReportedHarness ||
+        undefined,
+      selfReportedModel:
+        args.selfReportedModel?.trim() ||
+        dynamicColumns.selfReportedModel ||
+        undefined,
+      // Pasted hackathon.md (capped, secrets redacted)
+      hackathonLog:
+        sanitizeHackathonLog(args.hackathonLog) ?? dynamicColumns.hackathonLog,
+      // Admin-added form fields with no dedicated column
+      dynamicFormValues,
       // Per-group custom question answers (empty values dropped)
       customFormAnswers: (() => {
         const answers = (args.customFormAnswers || [])
@@ -769,35 +831,10 @@ export const submit = mutation({
       targetLabel: args.title,
     });
 
-    // Auto-add to judging group if provided
+    // Auto-add to judging group if provided (idempotent shared helper;
+    // also writes the group activity log entry)
     if (args.judgingGroupId) {
-      // Type guard to ensure judgingGroupId is not undefined
-      const groupId: Id<"judgingGroups"> = args.judgingGroupId;
-      
-      // Check if already added to avoid duplicates
-      const existing = await ctx.db
-        .query("judgingGroupSubmissions")
-        .withIndex("by_groupId_storyId", (q) =>
-          q.eq("groupId", groupId).eq("storyId", storyId),
-        )
-        .unique();
-
-      if (!existing) {
-        await ctx.db.insert("judgingGroupSubmissions", {
-          groupId: groupId,
-          storyId: storyId,
-          addedBy: userId,
-          addedAt: Date.now(),
-        });
-        
-        // Create default submission status (Pending) so it can be judged
-        await ctx.db.insert("submissionStatuses", {
-          groupId: groupId,
-          storyId: storyId,
-          status: "pending",
-          lastUpdatedAt: Date.now(),
-        });
-      }
+      await ensureStoryInGroup(ctx, args.judgingGroupId, storyId, userId);
     }
 
     // Fire-and-forget AI spam scan; a scan failure can never break a submission
@@ -849,6 +886,8 @@ export const submitAnonymous = mutation({
     // Self-reported AI build attribution (unverified metadata, never scored)
     selfReportedHarness: v.optional(v.string()),
     selfReportedModel: v.optional(v.string()),
+    // Pasted hackathon.md for private/no-repo submissions (capped + redacted)
+    hackathonLog: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // No authentication required for anonymous submissions
@@ -947,6 +986,8 @@ export const submitAnonymous = mutation({
       // Self-reported AI build attribution (unverified metadata, never scored)
       selfReportedHarness: args.selfReportedHarness?.trim() || undefined,
       selfReportedModel: args.selfReportedModel?.trim() || undefined,
+      // Pasted hackathon.md (capped, secrets redacted)
+      hackathonLog: sanitizeHackathonLog(args.hackathonLog),
     });
 
     // Log the anonymous submission
@@ -980,8 +1021,8 @@ export const submitAnonymous = mutation({
 export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
-  return await ctx.storage.generateUploadUrl();
-}
+    return await ctx.storage.generateUploadUrl();
+  },
 });
 
 // Renamed vote to voteStory - Fixed: Removed read before write to avoid conflicts
@@ -1002,16 +1043,16 @@ export const voteStory = mutation({
     if (existingVote) {
       // User has already voted, remove the vote (unvote action)
       await ctx.db.delete(existingVote._id);
-      
+
       // Read story AFTER write operations to get current state for alert
       const story = await ctx.db.get(args.storyId);
       if (!story) {
         throw new Error("Story not found");
       }
-      
+
       // Decrement vote count - read current value for calculation
       await ctx.db.patch(args.storyId, { votes: story.votes - 1 });
-      
+
       return {
         success: true,
         action: "unvoted",
@@ -1158,6 +1199,9 @@ export const updateStatus = mutation({
     }
 
     const updatePayload: Partial<Doc<"stories">> = { status: args.status };
+    // Keep the denormalized isApproved flag in sync with status so indexed
+    // queries (e.g. by_userId_isApproved) stay truthful after moderation
+    updatePayload.isApproved = args.status === "approved";
     if (args.status === "rejected") {
       updatePayload.rejectionReason =
         args.rejectionReason || "No reason provided.";
@@ -1353,7 +1397,7 @@ export const toggleStoryPinStatus = mutation({
       throw new Error("Story not found");
     }
     const newPinnedStatus = !story.isPinned;
-    
+
     // Patch immediately after reading
     await ctx.db.patch(args.storyId, {
       isPinned: newPinnedStatus,
@@ -2004,16 +2048,18 @@ export const listAllStoriesAdmin = query({
 
     if (args.searchTerm && args.searchTerm.trim() !== "") {
       const searchTerm = args.searchTerm.trim();
-      const query = ctx.db.query("stories").withSearchIndex("search_all", (q) => {
-        let builder = q.search("title", searchTerm);
-        if (args.filters.status) {
-          builder = builder.eq("status", args.filters.status);
-        }
-        if (args.filters.isHidden !== undefined) {
-          builder = builder.eq("isHidden", args.filters.isHidden);
-        }
-        return builder;
-      });
+      const query = ctx.db
+        .query("stories")
+        .withSearchIndex("search_all", (q) => {
+          let builder = q.search("title", searchTerm);
+          if (args.filters.status) {
+            builder = builder.eq("status", args.filters.status);
+          }
+          if (args.filters.isHidden !== undefined) {
+            builder = builder.eq("isHidden", args.filters.isHidden);
+          }
+          return builder;
+        });
       initialStories = await query.collect();
       // Post-filter if necessary
       if (
@@ -2230,14 +2276,19 @@ export const _getStoryDetailsBatch = internalQuery({
         status: story.status,
         isHidden: story.isHidden,
         isPinned: story.isPinned,
-        customMessage: story.customMessage,
         isApproved: story.isApproved,
+        teamName: story.teamName,
+        teamMemberCount: story.teamMemberCount,
+        teamMembers: story.teamMembers,
+        selfReportedHarness: story.selfReportedHarness,
+        selfReportedModel: story.selfReportedModel,
+        customFormAnswers: story.customFormAnswers,
+        dynamicFormValues: story.dynamicFormValues,
 
         // Joined and calculated data, ensuring alignment with StoryWithDetailsPublic
         authorName: story.authorName,
         authorUsername: story.authorUsername,
         authorImageUrl: story.authorImageUrl,
-        authorEmail: story.authorEmail,
         tags: story.tags,
         screenshotUrl: story.screenshotUrl,
         additionalImageUrls: story.additionalImageUrls,
@@ -2344,16 +2395,15 @@ export const submitDynamic = mutation({
     if (formData.longDescription)
       storyData.longDescription = formData.longDescription;
     if (formData.videoUrl) storyData.videoUrl = formData.videoUrl;
-    if (formData.linkedinUrl) storyData.linkedinUrl = formData.linkedinUrl;
-    if (formData.twitterUrl) storyData.twitterUrl = formData.twitterUrl;
-    if (formData.githubUrl) storyData.githubUrl = formData.githubUrl;
-    if (formData.chefShowUrl) storyData.chefShowUrl = formData.chefShowUrl;
-    if (formData.chefAppUrl) storyData.chefAppUrl = formData.chefAppUrl;
-    // Self-reported AI build attribution (unverified metadata, never scored)
-    if (formData.selfReportedHarness)
-      storyData.selfReportedHarness = formData.selfReportedHarness;
-    if (formData.selfReportedModel)
-      storyData.selfReportedModel = formData.selfReportedModel;
+    // Map every enabled admin-managed form field generically: known keys
+    // fill their stories column (hackathonLog sanitized), the rest persist
+    // in dynamicFormValues so new admin-added fields are never dropped.
+    const { dynamicColumns, dynamicFormValues } =
+      await resolveDynamicFieldRecord(ctx, formData);
+    for (const [column, value] of Object.entries(dynamicColumns)) {
+      if (value) storyData[column] = value;
+    }
+    if (dynamicFormValues) storyData.dynamicFormValues = dynamicFormValues;
     if (screenshotId) storyData.screenshotId = screenshotId;
 
     // Set submitter info
@@ -2531,14 +2581,18 @@ export const getRelatedStoriesByTags = query({
             ).then((urls) => urls.filter((url) => url !== ""))
           : [];
 
-        return {
+        return omitPublicStoryPii({
           ...story,
+          voteScore: story.votes,
+          commentsCount: story.commentCount ?? 0,
+          averageRating: 0,
+          votesCount: story.votes,
           authorUsername,
           authorName,
           tags: resolvedTags.filter((tag) => tag !== null) as Doc<"tags">[],
           screenshotUrl,
           additionalImageUrls,
-        };
+        } as StoryWithDetails);
       }),
     );
 
@@ -2699,6 +2753,7 @@ export const getStoryMetadata = internalQuery({
       .unique();
 
     if (!story) return null;
+    if (story.isSpam === true || story.isArchived === true) return null;
 
     // Resolve screenshot URL (main image for social sharing)
     const screenshotUrl = story.screenshotId

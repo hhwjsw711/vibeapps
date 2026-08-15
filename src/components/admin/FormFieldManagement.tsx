@@ -23,11 +23,39 @@ interface EditableFormField extends Doc<"storyFormFields"> {
   isDeleted?: boolean;
 }
 
+type StoryFormFieldType = Doc<"storyFormFields">["fieldType"];
+
+// Field type choices shared by the add and edit selects
+const FIELD_TYPE_OPTIONS = [
+  { value: "url", label: "URL" },
+  { value: "text", label: "Text" },
+  { value: "email", label: "Email" },
+  { value: "textarea", label: "Textarea" },
+  { value: "radio", label: "Radio (single choice)" },
+  { value: "multiselect", label: "Multi-select (checkboxes)" },
+  { value: "select", label: "Dropdown (select)" },
+];
+
+const isChoiceFieldType = (fieldType: string) =>
+  fieldType === "radio" || fieldType === "multiselect" || fieldType === "select";
+
+// Newline-separated textarea text -> clean options array
+const parseOptionsText = (text: string): string[] =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
 export function FormFieldManagement() {
   const { isLoading: authIsLoading, isAuthenticated } = useConvexAuth();
 
   const storyFormFields = useQuery(
     api.storyFormFields.listAdmin,
+    authIsLoading || !isAuthenticated ? "skip" : {},
+  );
+  // Per-option answer tallies for choice fields (radio/multiselect/select)
+  const answerCounts = useQuery(
+    api.storyFormFields.getChoiceAnswerCounts,
     authIsLoading || !isAuthenticated ? "skip" : {},
   );
   const settings = useQuery(api.settings.get);
@@ -50,9 +78,10 @@ export function FormFieldManagement() {
     placeholder: "",
     isEnabled: true,
     isRequired: false,
-    fieldType: "url" as const,
+    fieldType: "url" as StoryFormFieldType,
     description: "",
     storyPropertyName: "",
+    optionsText: "",
   });
 
   // Sync Convex data to local editable state
@@ -144,13 +173,23 @@ export function FormFieldManagement() {
       return;
     }
 
+    const parsedOptions = parseOptionsText(newFieldData.optionsText);
+    if (isChoiceFieldType(newFieldData.fieldType) && parsedOptions.length < 2) {
+      setError("Choice fields (radio, multi-select, dropdown) need at least 2 options");
+      return;
+    }
+
     setIsProcessing(true);
     setError(null);
 
     try {
       const order = editableFields.length;
+      const { optionsText: _optionsText, ...fieldData } = newFieldData;
       await createField({
-        ...newFieldData,
+        ...fieldData,
+        options: isChoiceFieldType(newFieldData.fieldType)
+          ? parsedOptions
+          : undefined,
         order,
       });
 
@@ -163,6 +202,7 @@ export function FormFieldManagement() {
         fieldType: "url",
         description: "",
         storyPropertyName: "",
+        optionsText: "",
       });
       setShowAddForm(false);
     } catch (error) {
@@ -186,6 +226,18 @@ export function FormFieldManagement() {
         if (field.isDeleted && !field.isNew) {
           await deleteField({ fieldId: field._id });
         } else if (!field.isDeleted && !field.isNew) {
+          // Clean in-progress option lines; clear options for non-choice types
+          const cleanedOptions = isChoiceFieldType(field.fieldType)
+            ? (field.options ?? []).map((o) => o.trim()).filter(Boolean)
+            : [];
+          if (
+            isChoiceFieldType(field.fieldType) &&
+            cleanedOptions.length < 2
+          ) {
+            throw new Error(
+              `"${field.label}" needs at least 2 options for a ${field.fieldType} field`,
+            );
+          }
           await updateField({
             fieldId: field._id,
             key: field.key,
@@ -195,6 +247,7 @@ export function FormFieldManagement() {
             isRequired: field.isRequired,
             order: field.order,
             fieldType: field.fieldType,
+            options: cleanedOptions,
             description: field.description,
             storyPropertyName: field.storyPropertyName,
           });
@@ -237,9 +290,7 @@ export function FormFieldManagement() {
       <div className="bg-canvas rounded-lg p-6 border border-hairline">
         {/* Header and Save Button */}
         <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
-          <h2 className="text-xl font-medium text-copy">
-            Manage Form Fields
-          </h2>
+          <h2 className="text-xl font-medium text-copy">Manage Form Fields</h2>
           <div className="flex gap-2">
             {hasPendingChanges && (
               <button
@@ -403,11 +454,7 @@ export function FormFieldManagement() {
                     }
                     aria-label="Field type"
                     className="w-full h-auto py-2 text-sm"
-                    options={[
-                      { value: "url", label: "URL" },
-                      { value: "text", label: "Text" },
-                      { value: "email", label: "Email" },
-                    ]}
+                    options={FIELD_TYPE_OPTIONS}
                   />
                 </div>
                 <div className="flex items-center gap-4">
@@ -441,6 +488,32 @@ export function FormFieldManagement() {
                   </label>
                 </div>
               </div>
+              {isChoiceFieldType(newFieldData.fieldType) && (
+                <div>
+                  <label className="block text-sm font-medium text-copy mb-1">
+                    Options (one per line) *
+                  </label>
+                  <textarea
+                    value={newFieldData.optionsText}
+                    onChange={(e) =>
+                      setNewFieldData((prev) => ({
+                        ...prev,
+                        optionsText: e.target.value,
+                      }))
+                    }
+                    rows={4}
+                    placeholder={"Option A\nOption B\nOption C"}
+                    className="w-full px-3 py-2 border border-hairline rounded-md text-copy focus:outline-none focus:ring-1 focus:ring-ink text-sm"
+                  />
+                  <p className="text-xs text-soft mt-1">
+                    {newFieldData.fieldType === "multiselect"
+                      ? "Submitters can pick multiple options."
+                      : newFieldData.fieldType === "select"
+                        ? "Submitters pick one option from a dropdown."
+                        : "Submitters pick one option."}
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-copy mb-1">
                   Description (Optional)
@@ -618,11 +691,7 @@ export function FormFieldManagement() {
                             }
                             aria-label="Field type"
                             className="w-full h-auto px-2 py-1 text-xs gap-1"
-                            options={[
-                              { value: "url", label: "URL" },
-                              { value: "text", label: "Text" },
-                              { value: "email", label: "Email" },
-                            ]}
+                            options={FIELD_TYPE_OPTIONS}
                           />
                         </div>
                         <div className="flex items-center gap-2 mt-4">
@@ -639,9 +708,7 @@ export function FormFieldManagement() {
                               }
                               className="rounded"
                             />
-                            <span className="text-xs text-copy">
-                              Enabled
-                            </span>
+                            <span className="text-xs text-copy">Enabled</span>
                           </label>
                           <label className="flex items-center gap-1">
                             <input
@@ -656,12 +723,30 @@ export function FormFieldManagement() {
                               }
                               className="rounded"
                             />
-                            <span className="text-xs text-copy">
-                              Required
-                            </span>
+                            <span className="text-xs text-copy">Required</span>
                           </label>
                         </div>
                       </div>
+                      {isChoiceFieldType(field.fieldType) && (
+                        <div>
+                          <label className="block text-xs font-medium text-copy mb-1">
+                            Options (one per line) *
+                          </label>
+                          <textarea
+                            value={(field.options ?? []).join("\n")}
+                            onChange={(e) =>
+                              handleFieldChange(
+                                field._id,
+                                "options",
+                                e.target.value.split("\n"),
+                              )
+                            }
+                            rows={4}
+                            className="w-full px-2 py-1 border border-hairline rounded text-xs"
+                            placeholder={"Option A\nOption B\nOption C"}
+                          />
+                        </div>
+                      )}
                       <div>
                         <label className="block text-xs font-medium text-copy mb-1">
                           Description (Optional)
@@ -698,9 +783,7 @@ export function FormFieldManagement() {
                           </span>
                         )}
                         {!field.isEnabled && (
-                          <span className="text-xs text-soft">
-                            (Disabled)
-                          </span>
+                          <span className="text-xs text-soft">(Disabled)</span>
                         )}
                       </div>
                       <div className="text-sm text-soft space-y-1">
@@ -712,6 +795,54 @@ export function FormFieldManagement() {
                         </div>
                         <div>Placeholder: {field.placeholder}</div>
                         <div>Type: {field.fieldType}</div>
+                        {isChoiceFieldType(field.fieldType) &&
+                          field.options &&
+                          field.options.length > 0 && (
+                            <div className="space-y-1">
+                              <div>Options: {field.options.join(", ")}</div>
+                              {/* Tiny per-option answer bars from submissions */}
+                              {(() => {
+                                const stats = answerCounts?.[field.key];
+                                if (!stats) return null;
+                                const max = Math.max(
+                                  1,
+                                  ...stats.counts.map((c) => c.count),
+                                );
+                                return (
+                                  <div className="mt-1 space-y-0.5 max-w-xs">
+                                    {stats.counts.map(({ option, count }) => (
+                                      <div
+                                        key={option}
+                                        className="flex items-center gap-2"
+                                      >
+                                        <span
+                                          className="w-28 truncate text-xs text-soft"
+                                          title={option}
+                                        >
+                                          {option}
+                                        </span>
+                                        <span className="flex-1 h-1.5 rounded-full bg-surface-alt overflow-hidden">
+                                          <span
+                                            className="block h-full rounded-full bg-ink opacity-70"
+                                            style={{
+                                              width: `${(count / max) * 100}%`,
+                                            }}
+                                          />
+                                        </span>
+                                        <span className="w-6 text-right text-xs tabular-nums text-soft">
+                                          {count}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    <div className="text-[11px] text-faint">
+                                      {stats.total}{" "}
+                                      {stats.total === 1 ? "answer" : "answers"}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          )}
                         <div>
                           Property:{" "}
                           <code className="bg-surface-alt px-1 rounded">

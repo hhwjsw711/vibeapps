@@ -83,12 +83,16 @@ export const ensureUser = mutation({
 
     if (existingUser) {
       let nameToStore = existingUser.name;
-      if (identity.givenName && identity.familyName) {
-        nameToStore = `${identity.givenName} ${identity.familyName}`;
-      } else if (identity.name) {
-        nameToStore = identity.name;
-      } else if (identity.nickname) {
-        nameToStore = identity.nickname;
+      // Skip Clerk name sync once the user has customized their name in-app,
+      // otherwise Clerk data (e.g. a stale last name) reverts their edit on every load
+      if (!existingUser.nameCustomized) {
+        if (identity.givenName && identity.familyName) {
+          nameToStore = `${identity.givenName} ${identity.familyName}`;
+        } else if (identity.name) {
+          nameToStore = identity.name;
+        } else if (identity.nickname) {
+          nameToStore = identity.nickname;
+        }
       }
 
       const updates: Partial<Doc<"users">> = {};
@@ -437,12 +441,15 @@ export const listUserStories = query({
       .order("desc")
       .collect();
 
-    if (basicStories.length === 0) {
+    const visibleStories = basicStories.filter(
+      (story) => story.status === "approved" && story.isHidden !== true,
+    );
+
+    if (visibleStories.length === 0) {
       return [];
     }
 
-    // Step 2: Get all story IDs
-    const storyIds = basicStories.map((story) => story._id);
+    const storyIds = visibleStories.map((story) => story._id);
 
     // Step 3: Call the internal batch query to get full details, including author info
     const detailedStories: StoryWithDetailsPublic[] = await ctx.runQuery(
@@ -508,7 +515,19 @@ type CommentDetailsForProfile = Doc<"comments"> & {
 // This defines the actual shape the handler must return when successful.
 // It uses the specific types for nested structures like StoryWithDetails, CommentDetailsForProfile etc.
 type UserProfileDataResolved = {
-  user: Doc<"users">;
+  user: {
+    _id: Id<"users">;
+    _creationTime: number;
+    name: string;
+    username?: string;
+    imageUrl?: string;
+    bio?: string;
+    website?: string;
+    twitter?: string;
+    bluesky?: string;
+    linkedin?: string;
+    isVerified?: boolean;
+  };
   stories: StoryWithDetailsPublic[]; // Changed from StoryWithDetails[] to StoryWithDetailsPublic[]
   votes: Array<{
     _id: Id<"votes">;
@@ -531,6 +550,7 @@ type UserProfileDataResolved = {
   followersCount: number;
   followingCount: number;
   isFollowedByCurrentUser: boolean;
+  isOwnProfile: boolean;
 };
 
 // Query to list comments by a user, with author and story details for profile display
@@ -592,6 +612,7 @@ export const getUserProfileByUsername = query({
       followersCount: v.number(),
       followingCount: v.number(),
       isFollowedByCurrentUser: v.boolean(),
+      isOwnProfile: v.boolean(),
     }),
   ),
   handler: async (ctx, args): Promise<UserProfileDataResolved | null> => {
@@ -604,13 +625,11 @@ export const getUserProfileByUsername = query({
       return null;
     }
 
-    // Explicitly shape the user object to match userInProfileValidator
+    // Public profile shape: no email or clerkId
     const userForProfile = {
       _id: userDoc._id,
       _creationTime: userDoc._creationTime,
       name: userDoc.name,
-      clerkId: userDoc.clerkId,
-      email: userDoc.email, // Will be undefined if not set, validator handles optional
       username: userDoc.username,
       imageUrl: userDoc.imageUrl,
       bio: userDoc.bio,
@@ -618,7 +637,7 @@ export const getUserProfileByUsername = query({
       twitter: userDoc.twitter,
       bluesky: userDoc.bluesky,
       linkedin: userDoc.linkedin,
-      isVerified: userDoc.isVerified ?? false, // Include isVerified field
+      isVerified: userDoc.isVerified ?? false,
     };
 
     const storiesFromDb = await ctx.db
@@ -629,7 +648,13 @@ export const getUserProfileByUsername = query({
       .order("desc")
       .take(100);
 
-    const storyDetailsPromises = storiesFromDb.map(
+    // Only show publicly visible stories. Older rejected stories may still have
+    // isApproved: true, so status is the source of truth here.
+    const visibleStories = storiesFromDb.filter(
+      (story) => story.status === "approved" && !story.isHidden,
+    );
+
+    const storyDetailsPromises = visibleStories.map(
       async (storyDoc: Doc<"stories">) => {
         const author: Doc<"users"> | null = storyDoc.userId
           ? await ctx.db.get(storyDoc.userId)
@@ -708,9 +733,24 @@ export const getUserProfileByUsername = query({
           }[],
         );
 
+        // Strip moderation and PII fields before returning. This is a public
+        // query, so rejection reasons, submitter emails, spam flags, team
+        // member emails, and edit history must never reach clients.
+        const {
+          rejectionReason: _rejectionReason,
+          email: _email,
+          customMessage: _customMessage,
+          spamReason: _spamReason,
+          spamMarkedAt: _spamMarkedAt,
+          spamMarkedBy: _spamMarkedBy,
+          changeLog: _changeLog,
+          teamMembers: _teamMembers,
+          ...publicStoryFields
+        } = storyDoc;
+
         // Constructing the object for StoryWithDetailsPublic
         return {
-          ...storyDoc, // Base story fields
+          ...publicStoryFields, // Base story fields minus sensitive data
           authorName: author?.name,
           authorUsername: author?.username,
           authorImageUrl: author?.imageUrl,
@@ -794,6 +834,8 @@ export const getUserProfileByUsername = query({
         profileUserId: userDoc._id,
       },
     );
+    const currentUser = await getAuthenticatedUserDoc(ctx);
+    const isOwnProfile = currentUser?._id === userDoc._id;
 
     return {
       user: userForProfile, // Use the shaped user object
@@ -804,6 +846,7 @@ export const getUserProfileByUsername = query({
       followersCount: followStats.followersCount,
       followingCount: followStats.followingCount,
       isFollowedByCurrentUser,
+      isOwnProfile,
     };
   },
 });
@@ -918,7 +961,8 @@ export const syncUserFromClerkWebhook = internalMutation({
       const updates: Partial<Doc<"users">> = {};
       let changed = false;
 
-      if (nameToStore !== existingUser.name) {
+      // Skip Clerk name sync once the user has customized their name in-app
+      if (!existingUser.nameCustomized && nameToStore !== existingUser.name) {
         updates.name = nameToStore;
         changed = true;
       }
@@ -1117,6 +1161,10 @@ export const updateProfileDetails = mutation({
 
     if (args.name !== undefined) {
       updates.name = args.name.trim();
+      // Mark the name as user-managed so Clerk sync stops overwriting it
+      if (args.name.trim() !== user.name) {
+        updates.nameCustomized = true;
+      }
     }
     if (args.bio !== undefined) {
       if (args.bio && args.bio.length > 200) {
@@ -1484,130 +1532,6 @@ export const unverifyUserByAdmin = mutation({
     await ctx.db.patch(args.userId, { isVerified: false });
     console.log(`Admin: User ${args.userId} has been unverified.`);
     return { success: true, userId: args.userId, newVerifiedStatus: false };
-  },
-});
-
-/**
- * [TEMPORARY] Set current user as admin in database for backward compatibility
- * This is a temporary function to help with testing admin notifications
- * In production, roles should be managed through Clerk
- */
-export const setCurrentUserAsAdminTemp = mutation({
-  args: {},
-  returns: v.object({
-    success: v.boolean(),
-    message: v.string(),
-  }),
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Authentication required");
-    }
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) {
-      throw new Error("User not found in database");
-    }
-
-    await ctx.db.patch(user._id, { role: "admin" });
-
-    return {
-      success: true,
-      message: `User ${user.name} (${user._id}) has been set as admin in database for testing`,
-    };
-  },
-});
-
-/**
- * [TEMPORARY] List all users to find correct email
- */
-export const listAllUsersForDebug = query({
-  args: {},
-  returns: v.array(
-    v.object({
-      _id: v.id("users"),
-      name: v.string(),
-      email: v.optional(v.string()),
-      username: v.optional(v.string()),
-      role: v.optional(v.string()),
-    }),
-  ),
-  handler: async (ctx) => {
-    const users = await ctx.db.query("users").collect();
-    return users.map((user) => ({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      username: user.username,
-      role: user.role,
-    }));
-  },
-});
-
-/**
- * [TEMPORARY] Set specific user as admin by username for testing
- */
-export const setUserAsAdminByUsername = mutation({
-  args: {
-    username: v.string(),
-  },
-  returns: v.object({
-    success: v.boolean(),
-    message: v.string(),
-  }),
-  handler: async (ctx, args) => {
-    // Find user by username
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_username", (q) => q.eq("username", args.username))
-      .unique();
-
-    if (!user) {
-      throw new Error(
-        `User with username ${args.username} not found in database`,
-      );
-    }
-
-    await ctx.db.patch(user._id, { role: "admin" });
-
-    return {
-      success: true,
-      message: `User ${user.name} (@${user.username}) has been set as admin in database for testing`,
-    };
-  },
-});
-
-/**
- * [TEMPORARY] Set specific user as admin by email for testing
- * This helps when you can't authenticate to run the other function
- */
-export const setUserAsAdminByEmail = mutation({
-  args: {
-    email: v.string(),
-  },
-  returns: v.object({
-    success: v.boolean(),
-    message: v.string(),
-  }),
-  handler: async (ctx, args) => {
-    // Find user by email
-    const users = await ctx.db.query("users").collect();
-    const user = users.find((u) => u.email === args.email);
-
-    if (!user) {
-      throw new Error(`User with email ${args.email} not found in database`);
-    }
-
-    await ctx.db.patch(user._id, { role: "admin" });
-
-    return {
-      success: true,
-      message: `User ${user.name} (${user.email}) has been set as admin in database for testing`,
-    };
   },
 });
 

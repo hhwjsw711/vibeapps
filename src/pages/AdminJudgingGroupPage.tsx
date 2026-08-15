@@ -15,9 +15,9 @@ import {
   Mail,
   PanelLeft,
   PanelLeftClose,
+  ScrollText,
   Settings,
   Sparkles,
-  Terminal,
 } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { NotFoundPage } from "./NotFoundPage";
@@ -37,9 +37,10 @@ import { GroupAccessSection } from "../components/admin/judging/GroupAccessSecti
 import { GroupSubmissionsSection } from "../components/admin/judging/GroupSubmissionsSection";
 import { GroupSubmitPageSection } from "../components/admin/judging/GroupSubmitPageSection";
 import { GroupAiSection } from "../components/admin/judging/GroupAiSection";
-import { GroupHackathonSection } from "../components/admin/judging/GroupHackathonSection";
 import { GroupEmailsSection } from "../components/admin/judging/GroupEmailsSection";
 import { GroupLinksSection } from "../components/admin/judging/GroupLinksSection";
+import { GroupActivitySection } from "../components/admin/judging/GroupActivitySection";
+import { GroupSlugEditor } from "../components/admin/judging/GroupSlugEditor";
 
 // Sidebar sections. Each maps to a ?section= value and a permission key
 // (null means visible to anyone who can open the page).
@@ -67,12 +68,6 @@ const SECTIONS = [
     perm: "judging.manage",
   },
   { key: "ai", label: "AI judge", icon: Sparkles, perm: "judging.ai.any" },
-  {
-    key: "hackathon",
-    label: "Hackathon skill",
-    icon: Terminal,
-    perm: "judging.manage",
-  },
   { key: "emails", label: "Emails", icon: Mail, perm: "judging.emails" },
   {
     key: "results",
@@ -87,6 +82,8 @@ const SECTIONS = [
     icon: Activity,
     perm: "judging.tracking",
   },
+  // Per-group audit log; anyone who can open the page (judging.view) can read it
+  { key: "activity", label: "Activity", icon: ScrollText, perm: null },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
@@ -187,6 +184,7 @@ function GroupWorkspace({ group }: { group: GroupDetails }) {
 
   const canManage = can("judging.manage");
   const canDelete = can("judging.delete");
+  const canChangeSlug = can("judging.slug");
   const canAi = can("judging.ai");
 
   return (
@@ -229,8 +227,14 @@ function GroupWorkspace({ group }: { group: GroupDetails }) {
           >
             {group.isActive ? "Active" : "Inactive"}
           </span>
-          <span className="text-xs text-faint font-mono">
+          <span className="inline-flex items-center gap-1 text-xs text-faint font-mono">
             /judging/{group.slug}
+            {canChangeSlug && (
+              <GroupSlugEditor
+                groupId={group._id}
+                currentSlug={group.slug}
+              />
+            )}
           </span>
         </div>
         {group.description && (
@@ -281,7 +285,11 @@ function GroupWorkspace({ group }: { group: GroupDetails }) {
           )}
           {activeSection === "links" && <GroupLinksSection group={group} />}
           {activeSection === "settings" && canManage && (
-            <GroupSettingsSection group={group} canDelete={canDelete} />
+            <GroupSettingsSection
+              group={group}
+              canDelete={canDelete}
+              canChangeSlug={canChangeSlug}
+            />
           )}
           {activeSection === "access" && canManage && (
             <GroupAccessSection group={group} />
@@ -302,9 +310,6 @@ function GroupWorkspace({ group }: { group: GroupDetails }) {
           {activeSection === "ai" && (
             <GroupAiSection group={group} canManage={canManage} canAi={canAi} />
           )}
-          {activeSection === "hackathon" && canManage && (
-            <GroupHackathonSection group={group} />
-          )}
           {activeSection === "emails" && can("judging.emails") && (
             <GroupEmailsSection group={group} />
           )}
@@ -316,6 +321,9 @@ function GroupWorkspace({ group }: { group: GroupDetails }) {
           )}
           {activeSection === "tracking" && can("judging.tracking") && (
             <JudgeTracking groupId={group._id} groupName={group.name} />
+          )}
+          {activeSection === "activity" && (
+            <GroupActivitySection group={group} canManage={canManage} />
           )}
         </div>
       </div>

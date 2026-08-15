@@ -29,6 +29,7 @@ import { Textarea } from "../components/ui/textarea";
 import { Label } from "../components/ui/label";
 import { Input } from "../components/ui/input";
 import { SimpleSelect } from "../components/ui/SimpleSelect";
+import { parseMultiselectValue } from "../components/ui/ChoiceFieldInput";
 import { ImageGallery } from "../components/ImageGallery";
 import { renderTextWithMentions } from "../utils/mentions";
 import { MentionTextarea } from "../components/ui/MentionTextarea";
@@ -59,6 +60,8 @@ export default function JudgingInterfacePage() {
   const [selectedJudgeName, setSelectedJudgeName] = useState<string | null>(
     null,
   );
+  // Index into choiceFilterOptions ("" = no choice-answer filter)
+  const [selectedChoiceFilter, setSelectedChoiceFilter] = useState<string>("");
 
   // Get session ID from localStorage on mount
   useEffect(() => {
@@ -77,7 +80,9 @@ export default function JudgingInterfacePage() {
 
   const allSubmissions = useQuery(
     api.judgingGroupSubmissions.getGroupSubmissions,
-    judgeSession ? { groupId: judgeSession.group._id } : "skip",
+    judgeSession && sessionId
+      ? { groupId: judgeSession.group._id, sessionId }
+      : "skip",
   );
 
   const criteria = useQuery(
@@ -90,13 +95,69 @@ export default function JudgingInterfacePage() {
     sessionId ? { sessionId } : "skip",
   );
 
+  // Choice field definitions used to build the "filter by answer" dropdown:
+  // admin-managed dynamic fields plus this group's custom questions.
+  const formFields = useQuery(api.storyFormFields.listEnabled);
+  const submissionPage = useQuery(
+    api.judgingGroups.getSubmissionPage,
+    judgeSession ? { slug: judgeSession.group.slug } : "skip",
+  );
+
   // Show ALL submissions in the group (no filtering)
   // The backend determines edit permissions via canEdit field
   const submissions = allSubmissions;
 
+  // Flat "Field label: Option" list; the select value is the array index
+  const choiceFilterOptions: Array<{
+    source: "dynamic" | "custom";
+    key: string;
+    label: string;
+    option: string;
+  }> = [];
+  for (const field of formFields ?? []) {
+    if (
+      (field.fieldType === "radio" ||
+        field.fieldType === "multiselect" ||
+        field.fieldType === "select") &&
+      (field.options ?? []).length > 0
+    ) {
+      for (const option of field.options ?? []) {
+        choiceFilterOptions.push({
+          source: "dynamic",
+          key: field.key,
+          label: field.label,
+          option,
+        });
+      }
+    }
+  }
+  for (const question of submissionPage?.submissionCustomQuestions ?? []) {
+    if (
+      (question.fieldType === "radio" ||
+        question.fieldType === "multiselect" ||
+        question.fieldType === "select") &&
+      (question.options ?? []).length > 0
+    ) {
+      for (const option of question.options ?? []) {
+        choiceFilterOptions.push({
+          source: "custom",
+          key: question.key,
+          label: question.label,
+          option,
+        });
+      }
+    }
+  }
+  const activeChoiceFilter = selectedChoiceFilter
+    ? choiceFilterOptions[Number(selectedChoiceFilter)]
+    : undefined;
+
   // Check if any filters are active
   const hasActiveFilters =
-    selectedTagId !== null || filterNotJudged || selectedJudgeName !== null;
+    selectedTagId !== null ||
+    filterNotJudged ||
+    selectedJudgeName !== null ||
+    activeChoiceFilter !== undefined;
 
   // Get unique list of judges who have completed at least one submission
   const activeJudges = judgeProgress?.submissionProgress
@@ -143,7 +204,28 @@ export default function JudgingInterfacePage() {
         matchesJudgeFilter = progressInfo?.completedBy === selectedJudgeName;
       }
 
-      return matchesTag && matchesJudgedFilter && matchesJudgeFilter;
+      // Filter by choice answer (radio/multiselect/select field values)
+      let matchesChoiceFilter = true;
+      if (activeChoiceFilter) {
+        const entries: Array<{ key: string; value: string }> =
+          activeChoiceFilter.source === "dynamic"
+            ? (submission as any).dynamicFormValues || []
+            : (submission as any).customFormAnswers || [];
+        const entry = entries.find((e) => e.key === activeChoiceFilter.key);
+        matchesChoiceFilter =
+          !!entry &&
+          (entry.value === activeChoiceFilter.option ||
+            parseMultiselectValue(entry.value).includes(
+              activeChoiceFilter.option,
+            ));
+      }
+
+      return (
+        matchesTag &&
+        matchesJudgedFilter &&
+        matchesJudgeFilter &&
+        matchesChoiceFilter
+      );
     }) || [];
 
   // Get unique tags from submissions in the judging group
@@ -221,12 +303,14 @@ export default function JudgingInterfacePage() {
   const submissionNotes = useQuery(
     api.judgingGroupSubmissions.getSubmissionNotes,
     judgeSession &&
+      sessionId &&
       displaySubmissions &&
       displaySubmissions.length > 0 &&
       displaySubmissions[currentSubmissionIndex]
       ? {
           groupId: judgeSession.group._id,
           storyId: displaySubmissions[currentSubmissionIndex]._id,
+          sessionId,
         }
       : "skip",
   );
@@ -315,7 +399,7 @@ export default function JudgingInterfacePage() {
   const handleStatusUpdate = async (
     newStatus: "pending" | "completed" | "skip",
   ) => {
-    if (!judgeSession || !displaySubmissions) return;
+    if (!judgeSession || !displaySubmissions || !sessionId) return;
 
     const currentSubmission = displaySubmissions[currentSubmissionIndex];
 
@@ -324,7 +408,7 @@ export default function JudgingInterfacePage() {
         groupId: judgeSession.group._id,
         storyId: currentSubmission._id,
         status: newStatus,
-        judgeId: judgeSession._id,
+        sessionId,
       });
     } catch (error) {
       console.error("Error updating status:", error);
@@ -430,7 +514,7 @@ export default function JudgingInterfacePage() {
   };
 
   const handleAddNote = async () => {
-    if (!judgeSession || !displaySubmissions || !newNote.trim()) return;
+    if (!judgeSession || !displaySubmissions || !sessionId || !newNote.trim()) return;
 
     const currentSubmission = displaySubmissions[currentSubmissionIndex];
 
@@ -438,7 +522,7 @@ export default function JudgingInterfacePage() {
       await addSubmissionNote({
         groupId: judgeSession.group._id,
         storyId: currentSubmission._id,
-        judgeId: judgeSession._id,
+        sessionId,
         content: newNote.trim(),
       });
       setNewNote("");
@@ -449,7 +533,7 @@ export default function JudgingInterfacePage() {
   };
 
   const handleReply = async (noteId: Id<"submissionNotes">) => {
-    if (!judgeSession || !displaySubmissions || !replyContent.trim()) return;
+    if (!judgeSession || !displaySubmissions || !sessionId || !replyContent.trim()) return;
 
     const currentSubmission = displaySubmissions[currentSubmissionIndex];
 
@@ -457,7 +541,7 @@ export default function JudgingInterfacePage() {
       await addSubmissionNote({
         groupId: judgeSession.group._id,
         storyId: currentSubmission._id,
-        judgeId: judgeSession._id,
+        sessionId,
         content: replyContent.trim(),
         replyToId: noteId,
       });
@@ -565,6 +649,7 @@ export default function JudgingInterfacePage() {
                 setSelectedTagId(null);
                 setFilterNotJudged(false);
                 setSelectedJudgeName(null);
+                setSelectedChoiceFilter("");
               }}
               className="inline-flex items-center gap-2"
             >
@@ -909,6 +994,23 @@ export default function JudgingInterfacePage() {
                         })),
                       ]}
                     />
+
+                    {/* Filter by choice answer (radio/multiselect/select) */}
+                    {choiceFilterOptions.length > 0 && (
+                      <SimpleSelect
+                        value={selectedChoiceFilter}
+                        onChange={(value) => setSelectedChoiceFilter(value)}
+                        aria-label="Filter by answer"
+                        className="w-full sm:w-52 h-8 text-sm px-2"
+                        options={[
+                          { value: "", label: "All Answers" },
+                          ...choiceFilterOptions.map((choice, index) => ({
+                            value: String(index),
+                            label: `${choice.label}: ${choice.option}`,
+                          })),
+                        ]}
+                      />
+                    )}
                   </div>
 
                   {/* Navigation Row */}
@@ -1623,6 +1725,34 @@ export default function JudgingInterfacePage() {
                             </span>
                             <p className="text-sm text-ink whitespace-pre-wrap break-words">
                               {answer.value}
+                            </p>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {/* Admin-added form field values without a dedicated column */}
+              {(currentSubmission as any).dynamicFormValues &&
+                (currentSubmission as any).dynamicFormValues.length > 0 && (
+                  <div className="bg-surface rounded-lg border border-hairline p-6">
+                    <h3 className="font-medium text-ink mb-4">
+                      Additional Form Fields
+                    </h3>
+                    <div className="space-y-3">
+                      {(currentSubmission as any).dynamicFormValues.map(
+                        (entry: {
+                          key: string;
+                          label: string;
+                          value: string;
+                        }) => (
+                          <div key={entry.key}>
+                            <span className="text-sm font-medium text-copy block">
+                              {entry.label}
+                            </span>
+                            <p className="text-sm text-ink whitespace-pre-wrap break-words">
+                              {entry.value}
                             </p>
                           </div>
                         ),

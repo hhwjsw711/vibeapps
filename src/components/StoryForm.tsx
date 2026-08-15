@@ -7,6 +7,7 @@ import { Id, Doc } from "../../convex/_generated/dataModel";
 import { Plus, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { useAuth } from "@clerk/clerk-react";
 import { AuthRequiredDialog } from "./ui/AuthRequiredDialog";
+import { ChoiceFieldInput } from "./ui/ChoiceFieldInput";
 
 // Inherits _id, _creationTime, name, showInHeader, isHidden?, backgroundColor?, textColor?
 type Tag = Doc<"tags">;
@@ -86,9 +87,7 @@ export function StoryForm() {
     }
 
     if (tagName.length > maxTagLength) {
-      setSubmitError(
-        `Tag names are limited to ${maxTagLength} characters.`,
-      );
+      setSubmitError(`Tag names are limited to ${maxTagLength} characters.`);
       return;
     }
 
@@ -205,6 +204,16 @@ export function StoryForm() {
         githubUrl: dynamicFormData.githubUrl || undefined,
         chefShowUrl: dynamicFormData.chefShowUrl || undefined,
         chefAppUrl: dynamicFormData.chefAppUrl || undefined,
+        // Pasted hackathon.md for private/no-repo projects
+        hackathonLog: dynamicFormData.hackathonLog || undefined,
+        // Every enabled admin-managed field, so new fields are never dropped
+        dynamicFieldValues: formFields
+          ?.filter((field) => (dynamicFormData[field.key] || "").trim())
+          .map((field) => ({
+            key: field.key,
+            label: field.label,
+            value: dynamicFormData[field.key],
+          })),
         // Team info (only include if team info is shown and has data)
         teamName:
           showTeamInfo && teamData.teamName ? teamData.teamName : undefined,
@@ -403,21 +412,14 @@ export function StoryForm() {
     <div
       className={`${settings?.hideSubmitPageSidebar ? "max-w-4xl" : "max-w-2xl"} mx-auto`}
     >
-      <Link
-        to="/"
-        className="text-soft hover:text-copy inline-block mb-6"
-      >
+      <Link to="/" className="text-soft hover:text-copy inline-block mb-6">
         ← Back to Apps
       </Link>
 
       <div className="bg-surface p-6 rounded-lg border border-hairline">
         <form onSubmit={handleSubmit} className="space-y-6">
-          <h2 className="text-xl font-medium text-ink">
-            Submit your app
-          </h2>{" "}
-          <span className="ml-2 text-sm text-copy">
-            What did you build?
-          </span>
+          <h2 className="text-xl font-medium text-ink">Submit your app</h2>{" "}
+          <span className="ml-2 text-sm text-copy">What did you build?</span>
           <div>
             <label
               htmlFor="title"
@@ -700,6 +702,7 @@ export function StoryForm() {
               <div key={field.key}>
                 <label
                   htmlFor={field.key}
+                  id={`${field.key}-label`}
                   className="block text-sm font-medium text-copy mb-1"
                 >
                   {field.label}
@@ -709,21 +712,69 @@ export function StoryForm() {
                     {field.description}
                   </div>
                 )}
-                <input
-                  type={field.fieldType}
-                  id={field.key}
-                  placeholder={field.placeholder}
-                  value={dynamicFormData[field.key] || ""}
-                  onChange={(e) =>
-                    setDynamicFormData((prev) => ({
-                      ...prev,
-                      [field.key]: e.target.value,
-                    }))
-                  }
-                  className="w-full px-3 py-2 bg-surface rounded-md text-copy focus:outline-none focus:ring-1 focus:ring-ink border border-hairline"
-                  required={field.isRequired}
-                  disabled={isSubmitting}
-                />
+                {field.fieldType === "radio" ||
+                field.fieldType === "multiselect" ||
+                field.fieldType === "select" ? (
+                  <ChoiceFieldInput
+                    fieldKey={field.key}
+                    fieldType={field.fieldType}
+                    options={field.options ?? []}
+                    placeholder={field.placeholder}
+                    value={dynamicFormData[field.key] || ""}
+                    onChange={(value) =>
+                      setDynamicFormData((prev) => ({
+                        ...prev,
+                        [field.key]: value,
+                      }))
+                    }
+                    required={field.isRequired}
+                    disabled={isSubmitting}
+                  />
+                ) : field.fieldType === "textarea" ? (
+                  <>
+                    <textarea
+                      id={field.key}
+                      placeholder={field.placeholder}
+                      value={dynamicFormData[field.key] || ""}
+                      onChange={(e) =>
+                        setDynamicFormData((prev) => ({
+                          ...prev,
+                          [field.key]: e.target.value,
+                        }))
+                      }
+                      rows={10}
+                      maxLength={20000}
+                      className="w-full px-3 py-2 bg-surface rounded-md text-copy focus:outline-none focus:ring-1 focus:ring-ink border border-hairline font-mono text-xs"
+                      required={field.isRequired}
+                      disabled={isSubmitting}
+                    />
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-xs text-soft">
+                        This will be read by judges. Do not paste API keys, env
+                        values, or personal data.
+                      </span>
+                      <span className="text-xs text-soft tabular-nums">
+                        {(dynamicFormData[field.key] || "").length}/20000
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <input
+                    type={field.fieldType}
+                    id={field.key}
+                    placeholder={field.placeholder}
+                    value={dynamicFormData[field.key] || ""}
+                    onChange={(e) =>
+                      setDynamicFormData((prev) => ({
+                        ...prev,
+                        [field.key]: e.target.value,
+                      }))
+                    }
+                    className="w-full px-3 py-2 bg-surface rounded-md text-copy focus:outline-none focus:ring-1 focus:ring-ink border border-hairline"
+                    required={field.isRequired}
+                    disabled={isSubmitting}
+                  />
+                )}
               </div>
             ))}
           {formFields === undefined && (
@@ -902,7 +953,9 @@ export function StoryForm() {
                         : "var(--th-soft)",
                       borderColor: selectedTagIds.includes(tag._id)
                         ? tag.borderColor ||
-                          (tag.backgroundColor ? "transparent" : "var(--th-hairline-strong)")
+                          (tag.backgroundColor
+                            ? "transparent"
+                            : "var(--th-hairline-strong)")
                         : "var(--th-hairline-strong)",
                     }}
                   >
@@ -988,7 +1041,8 @@ export function StoryForm() {
                           <span
                             className="inline-block px-2 py-0.5 rounded text-xs font-medium"
                             style={{
-                              backgroundColor: tag.backgroundColor || "var(--th-surface-alt)",
+                              backgroundColor:
+                                tag.backgroundColor || "var(--th-surface-alt)",
                               color: tag.textColor || "var(--th-copy)",
                               border: `1px solid ${tag.backgroundColor ? "transparent" : "var(--th-hairline-strong)"}`,
                             }}
@@ -996,9 +1050,7 @@ export function StoryForm() {
                             {tag.name}
                           </span>
                           {tag.isHidden && (
-                            <span className="text-xs text-faint">
-                              (Hidden)
-                            </span>
+                            <span className="text-xs text-faint">(Hidden)</span>
                           )}
                         </button>
                       ));
@@ -1025,7 +1077,8 @@ export function StoryForm() {
                           key={tag._id}
                           className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm border transition-colors"
                           style={{
-                            backgroundColor: tag.backgroundColor || "var(--th-surface-alt)",
+                            backgroundColor:
+                              tag.backgroundColor || "var(--th-surface-alt)",
                             color: tag.textColor || "var(--th-ink)",
                             borderColor: tag.backgroundColor
                               ? "transparent"

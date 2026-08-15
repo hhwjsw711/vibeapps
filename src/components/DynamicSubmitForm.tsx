@@ -7,6 +7,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 // import { Textarea } from "./ui/textarea"; // Unused for now
 import { CheckCircle, AlertCircle } from "lucide-react";
+import { ChoiceFieldInput } from "./ui/ChoiceFieldInput";
 import { Doc } from "../../convex/_generated/dataModel";
 
 type FormField = Doc<"storyFormFields">;
@@ -46,9 +47,7 @@ export function DynamicSubmitForm() {
         <div className="text-center">
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <h1 className="text-2xl font-bold text-ink">Invalid Form URL</h1>
-          <p className="text-copy mt-2">
-            The form URL appears to be invalid.
-          </p>
+          <p className="text-copy mt-2">The form URL appears to be invalid.</p>
         </div>
       </div>
     );
@@ -84,9 +83,7 @@ export function DynamicSubmitForm() {
       <div className="min-h-screen  flex items-center justify-center">
         <div className="max-w-2xl mx-auto text-center p-8">
           <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-6" />
-          <h1 className="text-3xl font-bold text-ink mb-4">
-            {form.title}
-          </h1>
+          <h1 className="text-3xl font-bold text-ink mb-4">{form.title}</h1>
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
             <p className="text-yellow-800 whitespace-pre-line">
               {form.disabledMessage ||
@@ -188,10 +185,7 @@ export function DynamicSubmitForm() {
 
     return (
       <div key={field._id} className="space-y-2">
-        <Label
-          htmlFor={field.key}
-          className="text-sm font-medium text-copy"
-        >
+        <Label htmlFor={field.key} className="text-sm font-medium text-copy">
           {field.label}
           {field.isRequired && <span className="text-red-500 ml-1">*</span>}
         </Label>
@@ -212,6 +206,42 @@ export function DynamicSubmitForm() {
               error ? "border-red-500" : ""
             }`}
           />
+        ) : field.fieldType === "radio" ||
+          field.fieldType === "multiselect" ||
+          field.fieldType === "select" ? (
+          <ChoiceFieldInput
+            fieldKey={field.key}
+            fieldType={field.fieldType}
+            options={field.options ?? []}
+            placeholder={field.placeholder}
+            value={value as string}
+            onChange={(newValue) => handleInputChange(field.key, newValue)}
+            disabled={isSubmitting}
+          />
+        ) : field.fieldType === "textarea" ? (
+          // Monospace paste area (e.g. hackathonLog) with counter + warning
+          <>
+            <textarea
+              id={field.key}
+              value={value as string}
+              onChange={(e) => handleInputChange(field.key, e.target.value)}
+              placeholder={field.placeholder?.replace(/\\n/g, "\n") || ""}
+              rows={10}
+              maxLength={20000}
+              className={`w-full px-3 py-2 border border-hairline-strong rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-xs ${
+                error ? "border-red-500" : ""
+              }`}
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-copy">
+                This will be read by judges. Do not paste API keys, env values,
+                or personal data.
+              </span>
+              <span className="text-xs text-copy tabular-nums">
+                {(value as string).length}/20000
+              </span>
+            </div>
+          </>
         ) : (
           <Input
             id={field.key}
@@ -239,9 +269,7 @@ export function DynamicSubmitForm() {
       <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Form Header */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-ink mb-4">
-            {form.title}
-          </h1>
+          <h1 className="text-3xl font-bold text-ink mb-4">{form.title}</h1>
           {form.headerText && (
             <div className="text-copy whitespace-pre-line mb-6">
               {form.headerText}
