@@ -36,6 +36,7 @@
 
 All PRD files are now organized in the `prds/` folder for better project structure:
 
+- `prds/profile-activity-tab-chevrons.md`: Disclosure chevrons on the profile activity tabs so closed lists read as openable
 - `prds/luma-listed-events-only.md`: Admin list is URL-added events only; add-by-URL lookup then get
 - `prds/email-footer-unsubscribe-spam-review.md`: Prod unsubscribe proxy fix, one shared email footer with working preference links, and admin alerts plus email when a submitter requests a spam review
 - `prds/sidebar-widgets-and-luma-events.md`: Catalog sidebar widget visibility, Luma event listings, compact back chevrons
@@ -175,7 +176,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 - `convex/emails/queries.ts`: V8 runtime queries and mutations for email data, including the Resend onEmailEvent callback that syncs emailLogs delivery statuses and records first-open timestamps into log metadata (separated from Node.js actions)
 - `convex/emails/helpers.ts`: Helper queries for email processing and data fetching
 - `convex/emails/broadcast.ts`: Admin broadcast email system with user search, tag-based targeting (send to everyone who used a tag, filterable by submission status), recipient counts, and batch processing
-- `convex/sendEmails.ts`: Convex Resend Component client (onEmailEvent callback registered) with subject prefix and from address enforcement
+- `convex/sendEmails.ts`: Convex Resend Component client (onEmailEvent callback registered) with subject prefix and from address enforcement, plus admin sample notification emails that bypass per-type toggles
 - `convex/emailSettings.ts`: User email preferences management with unsubscribe functionality
 - `convex/testDailyEmail.ts`: Admin testing functions for daily/weekly email triggers with clear logs utility
 - `convex/crons.ts`: Email cron jobs (daily admin, engagement processing, weekly digest), daily rebuild of cached discovery files, and hourly Luma calendar sync
@@ -211,8 +212,8 @@ All PRD files are now organized in the `prds/` folder for better project structu
 
 - `src/components/Layout.tsx`: Main layout wrapper with navigation, catalog sidebar widget/Luma gating, and preserved round header controls
 - `src/components/BackToAppsLink.tsx`: Shared 44px icon-only back chevron to the app catalog
-- `src/components/LumaEventCard.tsx`: Public Luma event card (thumbnail, name, dates, one-line description)
-- `src/components/LumaEventList.tsx`: Stacked Luma events with hairline dividers for sidebars and `/events`
+- `src/components/LumaEventCard.tsx`: Public Luma event card with a 50 percent larger square cover (108px compact, 144px default), then name, date, location, one-line description, and a visible event link. Missing cover or location is omitted
+- `src/components/LumaEventList.tsx`: Stacked Luma events with an admin-editable heading, hairline dividers, and a View all link to `/events`
 - `src/components/ProtectedLayout.tsx`: Authentication-protected layout wrapper
 - `src/components/Footer.tsx`: Site footer with About, Leaderboard, Events, live `/llms.txt` and `/vibeapps.md` directory links
 - `src/components/UserSyncer.tsx`: Clerk-Convex user synchronization component
@@ -252,7 +253,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 - `src/components/admin/UserModeration.tsx`: User management, verification, and ban/pause functionality
 - `src/components/admin/TagManagement.tsx`: Tag creation and customization with colors, emojis, and ordering. Per-tag toggles control visibility in the header, on the app detail page, and on app card lists, plus archive. Save and drag-and-drop reorder persist only changed tags in parallel (fast with large tag sets); includes paginated list with selectable page size (5-200), synced top and bottom pagination controls, search across all tags, a Tag limits card (max tags per submission, max tag name length), and bulk selection with Archive/Unarchive/Delete actions and inline delete confirm
 - `src/components/admin/Settings.tsx`: Site-wide settings including sidebar widget visibility, submit page layout, and Luma events
-- `src/components/admin/LumaEventsSettings.tsx`: Admin Luma manager: calendar URL, field defaults, surface toggles synced with Sidebar widgets, test/sync, add-by-URL, list/reorder/placements
+- `src/components/admin/LumaEventsSettings.tsx`: Admin Luma manager: calendar URL, sidebar heading, field defaults, surface toggles synced with Sidebar widgets, test/sync, add-by-URL, list/reorder/placements
 - `src/components/admin/NumbersView.tsx`: Analytics and metrics dashboard with key totals plus follower and following rankings
 - `src/components/admin/ReportManagement.tsx`: User report review and resolution with status tracking and email notification integration
 - `src/components/admin/EmailManagement.tsx`: Complete email system management with Send & Settings and Templates sub tabs: global toggle, per-type send options (including the judging group emails toggle), broadcast emails (all users, selected users, or everyone who used a tag), user search, testing tools, and admin alert configuration
@@ -330,7 +331,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 - `src/pages/SignUpPage.tsx`: User registration page; honors a sanitized `redirect_url` query param as Clerk's `forceRedirectUrl` and carries it across the switch to sign-in
 - `src/pages/SignOutPage.tsx`: User sign-out confirmation
 - `src/pages/SetUsernamePage.tsx`: Username setup for new users
-- `src/pages/UserProfilePage.tsx`: User profile display and management with email preferences and unsubscribe functionality
+- `src/pages/UserProfilePage.tsx`: User profile display and management. Activity lists start closed with a chevron marking open and closed state. Compact owner-only Inbox, Edit my profile, and Manage Account & Email header controls on one row, `#manage-profile` and `#email-preferences` hash scroll, sign-in fallback via `?section=`
 - `src/pages/TagPage.tsx`: Tag-filtered app listings with a one-row header (shared back chevron, tag pill, count) for list, grid, and vibe
 - `src/pages/EventsPage.tsx`: Public `/events` list of listed Luma events with outbound links
 - `src/pages/LeaderboardPage.tsx`: Weekly vibes leaderboard with a compact back chevron header

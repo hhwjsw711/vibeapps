@@ -15,6 +15,13 @@ import { patchLumaWidgetEntireApp } from "./settings";
 const CONFIG_ID = "global";
 const LUMA_BASE = "https://public-api.luma.com";
 const MAX_EVENTS = 80;
+const DEFAULT_SIDEBAR_TITLE = "Upcoming events";
+const MAX_SIDEBAR_TITLE_LENGTH = 80;
+
+function resolveSidebarTitle(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : DEFAULT_SIDEBAR_TITLE;
+}
 
 export const lumaPlacementValidator = v.union(
   v.literal("list_view"),
@@ -43,6 +50,7 @@ const publicEventValidator = v.object({
   url: v.string(),
   coverUrl: v.optional(v.string()),
   description: v.optional(v.string()),
+  location: v.optional(v.string()),
   startAt: v.optional(v.number()),
   endAt: v.optional(v.number()),
   timezone: v.optional(v.string()),
@@ -61,6 +69,7 @@ const adminEventValidator = v.object({
   url: v.string(),
   coverUrl: v.optional(v.string()),
   description: v.optional(v.string()),
+  location: v.optional(v.string()),
   startAt: v.optional(v.number()),
   endAt: v.optional(v.number()),
   timezone: v.optional(v.string()),
@@ -103,6 +112,7 @@ type ParsedLumaEvent = {
   url: string;
   coverUrl?: string;
   description?: string;
+  location?: string;
   startAt?: number;
   endAt?: number;
   timezone?: string;
@@ -121,6 +131,46 @@ function pickString(record: Record<string, unknown>, keys: Array<string>): strin
     if (typeof value === "string" && value.trim().length > 0) {
       return value.trim();
     }
+  }
+  return undefined;
+}
+
+function trimLocation(value: string): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > 80 ? `${text.slice(0, 77)}…` : text;
+}
+
+function pickLocation(record: Record<string, unknown>): string | undefined {
+  const geo =
+    asRecord(record.geo_address_json) ??
+    asRecord(record.geo_address) ??
+    asRecord(record.geo_address_info) ??
+    asRecord(record.location);
+  if (geo) {
+    const cityState = pickString(geo, ["city_state", "full_address", "address"]);
+    if (cityState) return trimLocation(cityState);
+    const city = pickString(geo, ["city"]);
+    const region = pickString(geo, ["region", "state"]);
+    if (city && region) return trimLocation(`${city}, ${region}`);
+    if (city) return trimLocation(city);
+  }
+  const locationType = pickString(record, [
+    "location_type",
+    "event_type",
+    "meeting_type",
+  ])?.toLowerCase();
+  if (
+    record.virtual === true ||
+    record.online === true ||
+    locationType === "online" ||
+    locationType === "virtual"
+  ) {
+    return "Online";
+  }
+  const plain = pickString(record, ["location", "venue", "city"]);
+  if (plain && plain.toLowerCase() !== "offline") {
+    return trimLocation(plain);
   }
   return undefined;
 }
@@ -144,6 +194,7 @@ function parseLumaEvent(entry: unknown): ParsedLumaEvent | null {
     description: oneLineDescription(
       pickString(nested, ["description", "description_short", "one_liner"]),
     ),
+    location: pickLocation(nested) ?? pickLocation(row),
     startAt: parseIsoMs(nested.start_at ?? nested.startAt),
     endAt: parseIsoMs(nested.end_at ?? nested.endAt),
     timezone: pickString(nested, ["timezone", "time_zone"]),
@@ -331,6 +382,7 @@ export const getPublicConfig = query({
     showName: v.boolean(),
     showDates: v.boolean(),
     showDescription: v.boolean(),
+    sidebarTitle: v.string(),
   }),
   handler: async (ctx) => {
     const doc = await ctx.db
@@ -344,6 +396,7 @@ export const getPublicConfig = query({
         showName: true,
         showDates: true,
         showDescription: true,
+        sidebarTitle: DEFAULT_SIDEBAR_TITLE,
       };
     }
     return {
@@ -354,6 +407,7 @@ export const getPublicConfig = query({
       showName: doc.showName,
       showDates: doc.showDates,
       showDescription: doc.showDescription,
+      sidebarTitle: resolveSidebarTitle(doc.sidebarTitle),
     };
   },
 });
@@ -384,6 +438,7 @@ export const listForPlacement = query({
       url: event.url,
       coverUrl: event.coverUrl,
       description: event.description,
+      location: event.location,
       startAt: event.startAt,
       endAt: event.endAt,
       timezone: event.timezone,
@@ -408,6 +463,7 @@ export const getAdminState = query({
       showName: v.boolean(),
       showDates: v.boolean(),
       showDescription: v.boolean(),
+      sidebarTitle: v.optional(v.string()),
       lastSyncedAt: v.optional(v.number()),
       lastSyncError: v.optional(v.string()),
     }),
@@ -433,6 +489,7 @@ export const getAdminState = query({
         showName: doc?.showName ?? true,
         showDates: doc?.showDates ?? true,
         showDescription: doc?.showDescription ?? true,
+        sidebarTitle: doc?.sidebarTitle,
         lastSyncedAt: doc?.lastSyncedAt,
         lastSyncError: doc?.lastSyncError,
       },
@@ -443,6 +500,7 @@ export const getAdminState = query({
         url: event.url,
         coverUrl: event.coverUrl,
         description: event.description,
+        location: event.location,
         startAt: event.startAt,
         endAt: event.endAt,
         timezone: event.timezone,
@@ -466,6 +524,7 @@ export const updateConfig = mutation({
     showName: v.optional(v.boolean()),
     showDates: v.optional(v.boolean()),
     showDescription: v.optional(v.boolean()),
+    sidebarTitle: v.optional(v.union(v.string(), v.null())),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -474,6 +533,20 @@ export const updateConfig = mutation({
       .query("lumaConfig")
       .withIndex("by_identifier", (q) => q.eq("identifier", CONFIG_ID))
       .unique();
+    const nextSidebarTitle =
+      args.sidebarTitle === undefined
+        ? undefined
+        : args.sidebarTitle === null
+          ? ""
+          : args.sidebarTitle.trim();
+    if (
+      nextSidebarTitle !== undefined &&
+      nextSidebarTitle.length > MAX_SIDEBAR_TITLE_LENGTH
+    ) {
+      throw new Error(
+        `Sidebar heading must be ${MAX_SIDEBAR_TITLE_LENGTH} characters or fewer`,
+      );
+    }
     const patch = {
       enabled: args.enabled,
       calendarUrl:
@@ -482,6 +555,7 @@ export const updateConfig = mutation({
       showName: args.showName,
       showDates: args.showDates,
       showDescription: args.showDescription,
+      sidebarTitle: nextSidebarTitle,
     };
     const cleaned: Record<string, boolean | string | undefined> = {};
     for (const [key, value] of Object.entries(patch)) {
@@ -498,6 +572,9 @@ export const updateConfig = mutation({
         showName: args.showName ?? true,
         showDates: args.showDates ?? true,
         showDescription: args.showDescription ?? true,
+        ...(nextSidebarTitle !== undefined
+          ? { sidebarTitle: nextSidebarTitle }
+          : {}),
       });
     }
     if (args.enabled !== undefined) {
@@ -575,6 +652,7 @@ export const upsertSyncedEvents = internalMutation({
         url: v.string(),
         coverUrl: v.optional(v.string()),
         description: v.optional(v.string()),
+        location: v.optional(v.string()),
         startAt: v.optional(v.number()),
         endAt: v.optional(v.number()),
         timezone: v.optional(v.string()),
@@ -629,6 +707,7 @@ export const upsertSyncedEvents = internalMutation({
         url: incoming.url,
         coverUrl: incoming.coverUrl,
         description: incoming.description,
+        location: incoming.location,
         startAt: incoming.startAt,
         endAt: incoming.endAt,
         timezone: incoming.timezone,
@@ -646,6 +725,7 @@ export const insertLookedUpEvent = internalMutation({
       url: v.string(),
       coverUrl: v.optional(v.string()),
       description: v.optional(v.string()),
+      location: v.optional(v.string()),
       startAt: v.optional(v.number()),
       endAt: v.optional(v.number()),
       timezone: v.optional(v.string()),

@@ -4,6 +4,7 @@ import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id, Doc } from "../../convex/_generated/dataModel";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
+import { authUrlWithReturn } from "../lib/redirectPath";
 import {
   ThumbsUp,
   MessageCircle,
@@ -33,6 +34,7 @@ import {
   Flag,
   Inbox,
   Send,
+  ChevronDown,
 } from "lucide-react";
 import type { Story } from "../types"; // Import the Story type
 import AlertDialog from "../components/ui/AlertDialog"; // Corrected path
@@ -47,6 +49,39 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useDialog } from "../hooks/useDialog";
+
+const PROFILE_SECTION_IDS = ["email-preferences", "manage-profile"] as const;
+type ProfileSectionId = (typeof PROFILE_SECTION_IDS)[number];
+
+function readProfileSection(
+  hash: string,
+  search: string,
+): ProfileSectionId | null {
+  const fromHash = hash.replace(/^#/, "");
+  if ((PROFILE_SECTION_IDS as readonly string[]).includes(fromHash)) {
+    return fromHash as ProfileSectionId;
+  }
+  const fromQuery = new URLSearchParams(search).get("section");
+  if (
+    fromQuery &&
+    (PROFILE_SECTION_IDS as readonly string[]).includes(fromQuery)
+  ) {
+    return fromQuery as ProfileSectionId;
+  }
+  return null;
+}
+
+// Small disclosure chevron: down when closed, flipped when open
+function ActivityTabChevron({ open }: { open: boolean }) {
+  return (
+    <ChevronDown
+      className={`h-3.5 w-3.5 shrink-0 transition-transform duration-150 ${
+        open ? "rotate-180 text-ink" : "text-faint"
+      }`}
+      aria-hidden="true"
+    />
+  );
+}
 
 // Placeholder for loading and error states
 const Loading = () => <div className="text-center p-8"> </div>;
@@ -131,7 +166,11 @@ type FollowUserListItem = {
 export default function UserProfilePage() {
   const { username } = useParams<{ username: string }>();
   const location = useLocation(); // Get location object for query params
-  const { user: authUser, isLoaded: isClerkLoaded } = useUser();
+  const {
+    user: authUser,
+    isLoaded: isClerkLoaded,
+    isSignedIn,
+  } = useUser();
   const { signOut } = useClerk();
   const navigate = useNavigate();
   const { showMessage, DialogComponents } = useDialog();
@@ -186,6 +225,10 @@ export default function UserProfilePage() {
   const emailSettingsData = useQuery(
     api.emailSettings.getEmailSettings,
     isOwnProfileCandidate ? {} : "skip",
+  );
+  const myUser = useQuery(
+    api.users.getMyUserDocument,
+    isClerkLoaded && isSignedIn ? {} : "skip",
   );
   const updateEmailSettingsMutation = useMutation(
     api.emailSettings.updateEmailSettings,
@@ -275,7 +318,7 @@ export default function UserProfilePage() {
   const [newTwitter, setNewTwitter] = useState("");
   const [newBluesky, setNewBluesky] = useState("");
   const [newLinkedin, setNewLinkedin] = useState("");
-  const [activeTab, setActiveTab] = useState<string>("votes");
+  const [activeTab, setActiveTab] = useState<string | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isLoadingFollowAction, setIsLoadingFollowAction] = useState(false);
@@ -335,6 +378,7 @@ export default function UserProfilePage() {
     // ensuring the content is visible after a mini-dashboard click or direct tab click.
     if (
       tabContentAreaRef.current &&
+      activeTab !== null &&
       [
         "votes",
         "ratings",
@@ -351,17 +395,53 @@ export default function UserProfilePage() {
     }
   }, [activeTab]);
 
-  // Deep link from email footers: /:username#email-preferences scrolls to
-  // the Email Preferences card once it exists (rendered for the profile
-  // owner after email settings load). Hash is a fragment only; the server
-  // and OG crawlers never see it.
+  // Email footers and the header shortcut land on #email-preferences or
+  // #manage-profile. Clerk can drop hashes on return, so ?section= is the
+  // sign-in fallback. Signed-out visitors go through sign-in; signed-in
+  // visitors on someone else's profile go to their own username.
   useEffect(() => {
-    if (location.hash !== "#email-preferences") return;
-    const el = document.getElementById("email-preferences");
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!username) return;
+    const section = readProfileSection(location.hash, location.search);
+    if (!section) return;
+    if (!isClerkLoaded) return;
+
+    const returnPath = `/${username}?section=${section}`;
+
+    if (!isSignedIn) {
+      navigate(authUrlWithReturn("/sign-in", returnPath), { replace: true });
+      return;
     }
-  }, [location.hash, emailSettingsData]);
+
+    if (myUser === undefined) return;
+    if (myUser?.username && myUser.username.toLowerCase() !== username.toLowerCase()) {
+      navigate(`/${myUser.username}?section=${section}`, { replace: true });
+      return;
+    }
+
+    if (profileData?.isOwnProfile !== true) return;
+
+    const el = document.getElementById(section);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    if (location.search.includes("section=")) {
+      navigate(
+        { pathname: location.pathname, hash: `#${section}`, search: "" },
+        { replace: true },
+      );
+    }
+  }, [
+    username,
+    location.hash,
+    location.search,
+    location.pathname,
+    isClerkLoaded,
+    isSignedIn,
+    myUser,
+    profileData?.isOwnProfile,
+    emailSettingsData,
+    navigate,
+  ]);
 
   const handleMiniDashboardClick = (targetTabOrSection: string) => {
     if (targetTabOrSection === "submissions") {
@@ -370,9 +450,13 @@ export default function UserProfilePage() {
         block: "start",
       });
     } else {
-      // Set the active tab, the useEffect above will handle scrolling.
+      // Mini cards always open the matching list.
       setActiveTab(targetTabOrSection);
     }
+  };
+
+  const toggleActivityTab = (tab: string) => {
+    setActiveTab((current) => (current === tab ? null : tab));
   };
 
   // Handle /user-settings route for Clerk's UserProfile component
@@ -1255,7 +1339,7 @@ export default function UserProfilePage() {
                       ownInboxEnabled !== false && navigate("/inbox")
                     }
                     disabled={ownInboxEnabled === false}
-                    className={`px-6 py-2 rounded-md border border-hairline text-sm font-medium flex items-center justify-center transition-colors ${
+                    className={`h-8 px-3 rounded-md border border-hairline text-xs font-medium inline-flex items-center justify-center whitespace-nowrap shrink-0 transition-colors ${
                       ownInboxEnabled === false
                         ? "bg-surface-hover text-soft cursor-not-allowed"
                         : "bg-cta text-on-cta hover:bg-surface-hover hover:text-ink"
@@ -1267,7 +1351,7 @@ export default function UserProfilePage() {
                         : "View your inbox"
                     }
                   >
-                    <Inbox className="w-4 h-4 mr-2 text-md" />
+                    <Inbox className="w-3.5 h-3.5 mr-1.5" />
                     Inbox
                   </button>
 
@@ -1306,14 +1390,22 @@ export default function UserProfilePage() {
                     </span>
                   </div>
 
-                  {/* Edit Profile Button */}
+                  {/* Compact one-line CTAs next to Inbox */}
                   <button
                     onClick={handleEditToggle}
-                    className="px-6 py-2 rounded-md bg-cta border border-hairline text-on-cta text-sm font-medium hover:bg-surface-hover hover:text-ink flex items-center justify-center transition-colors"
+                    className="h-8 px-3 rounded-md bg-cta border border-hairline text-on-cta text-xs font-medium hover:bg-surface-hover hover:text-ink inline-flex items-center justify-center whitespace-nowrap shrink-0 transition-colors"
                     style={{ fontFamily: "var(--th-font-sans)" }}
                   >
-                    <Edit3 className="w-4 h-4 mr-2 text-md" /> Edit my profile
+                    <Edit3 className="w-3.5 h-3.5 mr-1.5" /> Edit my profile
                   </button>
+                  <a
+                    href="#manage-profile"
+                    className="h-8 px-3 rounded-md bg-cta border border-hairline text-on-cta text-xs font-medium hover:bg-surface-hover hover:text-ink inline-flex items-center justify-center whitespace-nowrap shrink-0 transition-colors"
+                    style={{ fontFamily: "var(--th-font-sans)" }}
+                  >
+                    <Settings className="w-3.5 h-3.5 mr-1.5" /> Manage Account
+                    & Email
+                  </a>
                 </div>
               )}
             </div>
@@ -1571,74 +1663,104 @@ export default function UserProfilePage() {
           {/* Tab Buttons */}
           <div className="flex flex-col gap-2 md:flex-row md:flex-wrap border-b border-hairline-strong mb-4">
             <button
-              onClick={() => setActiveTab("votes")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none ${
+              type="button"
+              onClick={() => toggleActivityTab("votes")}
+              aria-expanded={activeTab === "votes"}
+              aria-controls="tab-section-votes"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "votes"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
               Votes ({votes?.length ?? 0})
+              <ActivityTabChevron open={activeTab === "votes"} />
             </button>
             <button
-              onClick={() => setActiveTab("ratings")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none ${
+              type="button"
+              onClick={() => toggleActivityTab("ratings")}
+              aria-expanded={activeTab === "ratings"}
+              aria-controls="tab-section-ratings"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "ratings"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
               Ratings Given ({ratings?.length ?? 0})
+              <ActivityTabChevron open={activeTab === "ratings"} />
             </button>
             <button
-              onClick={() => setActiveTab("comments")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none ${
+              type="button"
+              onClick={() => toggleActivityTab("comments")}
+              aria-expanded={activeTab === "comments"}
+              aria-controls="tab-section-comments"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "comments"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
               Comments ({comments?.length ?? 0})
+              <ActivityTabChevron open={activeTab === "comments"} />
             </button>
             {isOwnProfile && (
               <button
-                onClick={() => setActiveTab("bookmarks")}
-                className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none flex items-center ${
+                type="button"
+                onClick={() => toggleActivityTab("bookmarks")}
+                aria-expanded={activeTab === "bookmarks"}
+                aria-controls="tab-section-bookmarks"
+                className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                   activeTab === "bookmarks"
                     ? "border-b-2 border-ink text-ink"
                     : "text-soft hover:text-copy hover:border-hairline-strong"
                 }`}
                 title="Bookmarks are private"
               >
-                <BookKey className="w-4 h-4 mr-1" />
-                {isOwnProfile
-                  ? `Bookmarks (${userBookmarksCount ?? 0})`
-                  : "Bookmarks"}
+                <span className="inline-flex items-center">
+                  <BookKey className="w-4 h-4 mr-1" />
+                  {isOwnProfile
+                    ? `Bookmarks (${userBookmarksCount ?? 0})`
+                    : "Bookmarks"}
+                </span>
+                <ActivityTabChevron open={activeTab === "bookmarks"} />
               </button>
             )}
             {/* Followers Tab Button */}
             <button
-              onClick={() => setActiveTab("followers")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none flex items-center ${
+              type="button"
+              onClick={() => toggleActivityTab("followers")}
+              aria-expanded={activeTab === "followers"}
+              aria-controls="tab-section-followers"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "followers"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
-              <Users className="w-4 h-4 mr-1" /> Followers (
-              {followersCount ?? 0})
+              <span className="inline-flex items-center">
+                <Users className="w-4 h-4 mr-1" /> Followers (
+                {followersCount ?? 0})
+              </span>
+              <ActivityTabChevron open={activeTab === "followers"} />
             </button>
             {/* Following Tab Button */}
             <button
-              onClick={() => setActiveTab("following")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none flex items-center ${
+              type="button"
+              onClick={() => toggleActivityTab("following")}
+              aria-expanded={activeTab === "following"}
+              aria-controls="tab-section-following"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "following"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
-              <Users className="w-4 h-4 mr-1" /> Following (
-              {followingCount ?? 0})
+              <span className="inline-flex items-center">
+                <Users className="w-4 h-4 mr-1" /> Following (
+                {followingCount ?? 0})
+              </span>
+              <ActivityTabChevron open={activeTab === "following"} />
             </button>
           </div>
 
@@ -1977,11 +2099,11 @@ export default function UserProfilePage() {
         {isOwnProfile && (
           <section
             id="manage-profile"
-            className="mb-4 p-6 bg-surface rounded-lg border border-hairline"
+            className="mb-4 p-6 bg-surface rounded-lg border border-hairline scroll-mt-24"
             style={{ fontFamily: "var(--th-font-sans)" }}
           >
             <h2 className="text-lg font-normal text-ink mb-6 pb-3 border-b border-hairline-strong">
-              Manage Profile & Account
+              Manage Profile, Account & Email Preferences
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Column 1: Profile Settings and General Account Management */}
@@ -2017,7 +2139,7 @@ export default function UserProfilePage() {
                   {/* Email Preferences */}
                   <div
                     id="email-preferences"
-                    className="mt-4 p-4 bg-surface border border-hairline rounded-md"
+                    className="mt-4 p-4 bg-surface border border-hairline rounded-md scroll-mt-24"
                   >
                     <div className="flex items-center justify-between mb-3">
                       <div>

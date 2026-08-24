@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Admin Settings Luma block can set the catalog sidebar heading. Blank uses Upcoming events. The same heading shows on `/events` (2026-08-24).
+- Own-profile header now has a Manage Profile & Account control next to Edit my profile. Same CTA chrome. It jumps to `#manage-profile` (2026-08-23).
+- Signed-out email preference clicks go through sign-in with `?section=email-preferences`, then scroll the Email Preferences card. Signed-in visitors on someone else's profile are sent to their own username (2026-08-23).
+- Luma sidebar cards stack a modest square cover above title, date, location, one-line blurb, and a visible event link. Hairline between events. View all goes to `/events` (2026-08-23).
+- Admin sample send for submission confirmation, new submission group alert, results live, and judging emails, routed through Resend so type toggles do not block the samples (2026-08-23).
 - Admins now get an in-app alert and a `spam_review_request` email when a submitter disputes a spam mark from the notifications page. First request only; gated by the global master switch, a new "Spam review requests" toggle in the Email dashboard, and each admin's own unsubscribe (2026-08-22).
 - Amber "N review requested" chip on the admin Marked spam list that filters to disputed rows, matching the existing count pill pattern (2026-08-22).
 - Shared `standardEmailFooter` and `emailPreferencesUrl` helpers so every email (templates, submissions, spam, judging group sends, and the admin preview) renders one footer with a clickable Manage email preferences link, a per-recipient Unsubscribe link, the open-source credit maintained by WayneSutton.ai, and the CAN-SPAM address (2026-08-22).
@@ -28,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Own-profile Inbox button is now the same height as the Edit my profile and Manage Account & Email buttons next to it (2026-08-24).
+- Profile account section is now titled Manage Profile, Account & Email Preferences (2026-08-24).
+- Profile activity tabs now carry a small chevron so closed lists look openable. It points down when the list is closed and flips up when it opens (2026-08-24).
+- Profile Votes, Ratings Given, Comments, and Bookmarks lists start closed. Mini dashboard cards and tab buttons still open the matching list. Clicking an open tab closes it (2026-08-24).
+- Edit my profile and Manage Account & Email are compact one-line header CTAs. The account button label is now Manage Account & Email (2026-08-24).
+- Luma event square covers are 50 percent larger (108px compact, 144px default) (2026-08-24).
+- Welcome "Complete your profile" now points at `/{username}#manage-profile` (or `/set-username` when the account has no username) (2026-08-23).
+- Manage email preferences still uses `https://vibeapps.dev/{username}#email-preferences`. The profile page now treats that hash like a real in-page anchor (2026-08-23).
 - Upcoming Luma events on app pages render under View Change Log instead of next to the back chevron (2026-08-22).
 - Admin Dashboard header is one row (chevron plus title) with tighter vertical padding (2026-08-22).
 - Catalog sidebar stays off on `/admin`, `/notifications`, `/inbox`, `/leaderboard`, and `/events` so those pages do not waste a column (2026-08-22).

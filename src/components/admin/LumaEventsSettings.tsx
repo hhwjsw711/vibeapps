@@ -41,6 +41,7 @@ export function LumaEventsSettings() {
   const addByUrl = useAction(api.luma.addByUrl);
 
   const [calendarUrl, setCalendarUrl] = useState("");
+  const [sidebarTitle, setSidebarTitle] = useState("");
   const [eventUrl, setEventUrl] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +52,7 @@ export function LumaEventsSettings() {
 
   const config = state?.config;
   const hydratedUrl = calendarUrl || config?.calendarUrl || "";
+  const headingDraft = sidebarTitle || config?.sidebarTitle || "";
 
   const run = async (
     kind: "test" | "sync" | "add" | "save",
@@ -196,6 +198,45 @@ export function LumaEventsSettings() {
             Save URL
           </button>
         </div>
+      </div>
+
+      <div>
+        <label
+          htmlFor="lumaSidebarTitle"
+          className="block text-sm font-medium text-copy mb-1"
+        >
+          Sidebar heading
+        </label>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            id="lumaSidebarTitle"
+            type="text"
+            value={headingDraft}
+            onChange={(e) => setSidebarTitle(e.target.value)}
+            placeholder="Upcoming events"
+            maxLength={80}
+            className="flex-1 px-3 py-2 bg-surface border border-hairline rounded-md text-copy text-sm focus:outline-none focus:ring-1 focus:ring-ink"
+          />
+          <button
+            type="button"
+            onClick={() =>
+              void run("save", async () => {
+                await updateConfig({
+                  sidebarTitle: headingDraft.trim() || null,
+                });
+                setStatus("Sidebar heading saved");
+              })
+            }
+            className="px-3 py-2 text-sm bg-surface-alt border border-hairline rounded-md text-copy hover:bg-surface-hover"
+            disabled={busy !== null}
+          >
+            Save heading
+          </button>
+        </div>
+        <p className="text-xs text-soft mt-1">
+          Shown above events in the catalog sidebar and on /events. Leave blank
+          for Upcoming events.
+        </p>
       </div>
 
       <div>

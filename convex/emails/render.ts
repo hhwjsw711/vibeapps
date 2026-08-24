@@ -134,9 +134,10 @@ export type EmailFooterOpts = {
 
 /**
  * Where "Manage email preferences" points. Never `/profile` (not a real SPA
- * route): known usernames land on the public profile with the
- * #email-preferences fragment, account holders without a username go to
- * /set-username, and unknown recipients sign in first with a relative
+ * route). Known usernames land on their profile at the Email Preferences
+ * card (`#email-preferences`). The profile page signs the visitor in when
+ * needed, then scrolls that section. Account holders without a username
+ * go to /set-username. Unknown recipients sign in first with a relative
  * redirect path (sanitizeRedirectPath rejects absolute URLs).
  */
 export function emailPreferencesUrl(opts: {

@@ -161,7 +161,7 @@ export const generateWelcomeEmail = internalQuery({
               <div style="margin: 15px 0;">
                 <strong>Set up your profile</strong><br>
                 Choose your username, add your bio, upload a profile picture and enable or disable email notifications for your inbox. <br>
-                <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}` : "https://vibeapps.dev/set-username"}" style="color: #292929;">Complete your profile →</a>
+                <a href="${args.userUsername ? `https://vibeapps.dev/${args.userUsername}#manage-profile` : "https://vibeapps.dev/set-username"}" style="color: #292929;">Complete your profile →</a>
               </div>
             </div>
 

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { LumaEventCard } from "./LumaEventCard";
@@ -24,12 +25,14 @@ export function LumaEventList({
     api.luma.listForPlacement,
     enabled ? { placement } : "skip",
   );
+  const config = useQuery(api.luma.getPublicConfig, enabled ? {} : "skip");
+  const heading = config?.sidebarTitle ?? "Upcoming events";
 
   if (!enabled || events === undefined || events.length === 0) return null;
 
   return (
     <div className="p-4 bg-surface rounded-lg border border-hairline">
-      <h3 className="text-md font-normal text-ink mb-3">Upcoming events</h3>
+      <h3 className="text-md font-normal text-ink mb-3">{heading}</h3>
       <div className="space-y-3">
         {events.map((event, index) => (
           <div key={event._id}>
@@ -37,6 +40,14 @@ export function LumaEventList({
             <LumaEventCard event={event} compact={compact} />
           </div>
         ))}
+      </div>
+      <div className="mt-3 pt-3 border-t border-hairline">
+        <Link
+          to="/events"
+          className="text-sm text-copy hover:text-ink hover:underline"
+        >
+          View all
+        </Link>
       </div>
     </div>
   );

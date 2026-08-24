@@ -14,7 +14,9 @@ export function EventsPage() {
     <div className="pt-1 pb-2">
       <header className="flex items-center gap-1.5 sm:gap-2 mb-4 min-h-11">
         <BackToAppsLink />
-        <h1 className="text-[15px] font-medium text-ink">Upcoming events</h1>
+        <h1 className="text-[15px] font-medium text-ink">
+          {config?.sidebarTitle ?? "Upcoming events"}
+        </h1>
       </header>
 
       {config?.calendarUrl && (
