@@ -4,6 +4,8 @@ Brief description of the feature and its purpose.
 
 ## Recently Completed
 
+- 2026-08-25 19:30 UTC - Fixed blank page on empty tag routes like `/tag/allgashackathon` in production. The `TagPage.tsx` empty state rendered `Link` without importing it from react-router-dom, throwing `ReferenceError: Link is not defined` whenever a tag had zero approved submissions. Added the missing import; verified with tsc (no TagPage errors) and lints. Files: src/pages/TagPage.tsx.
+
 - 2026-08-25 19:10 UTC - Fixed the "Could Not Start AI Review ... Server Error" dialog on prod. Prod logs showed `startReview` throwing "AI judge is not enabled for this group" (the group's toggle was off), which Convex redacts to "Server Error" for plain Errors. User-facing guards in `startReview` and `retrySubmission` now throw `ConvexError` so the real message reaches the client, `getGroupAiResults` returns `aiJudgeEnabled`, and the admin AI results header disables the run button with a hint when the toggle is off. Verified with convex tsc (clean) and lints. Files: convex/aiJudge.ts, src/components/admin/AIJudgeResults.tsx.
 
 - 2026-08-25 09:45 UTC - AI Hackathon Report, Convex Recap, and Best Use of Convex stats now store and show auth provider plus Convex AI Gateway. No hackathon.md still uses the repo scan; live `/hackathon.md` and live-site Convex signals cover private or missing repos. Community Convex components are detected. No new component install on this app (Firecrawl and Context.dev already cover scrape and transcripts). PRD: prds/ai-judge-auth-gateway-report-facts.md. Files: convex/schema.ts, convex/aiJudge.ts, convex/aiJudgeAnalysis.ts, src/components/admin/AIJudgeResults.tsx, src/pages/AIJudgeResultsPage.tsx.
