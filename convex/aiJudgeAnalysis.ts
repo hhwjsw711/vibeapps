@@ -10,6 +10,7 @@ import {
 import { fetchVideoContext, type VideoContext } from "./videoTranscripts";
 import {
   parseHackathonLogHeader,
+  redactSecrets,
   type HackathonLogHeader,
 } from "./hackathonLog";
 
@@ -112,9 +113,52 @@ export type HarnessSignal = {
   confidence: "high" | "medium" | "low";
 };
 
+// Official @convex-dev/* packages are detected by prefix. Community Convex
+// components use other scopes and must be mapped by package name. Catalog:
+// https://www.convex.dev/components/get-convex.md (official, 26 as of 2026-08-22)
+// plus Firecrawl, Exa, Context.dev, Browser Use, and agent-ready.
+const COMMUNITY_COMPONENT_PACKAGES: Record<string, string> = {
+  "@firecrawl/firecrawl-convex": "firecrawl",
+  "@exalabs/convex-exa": "exa",
+  "@context-dot-dev/convex": "context-dot-dev",
+  "browser-use-convex-component": "browser-use",
+  "@waynesutton/agent-ready": "agent-ready",
+};
+
+function canonicalComponentName(spec: string): string | null {
+  if (
+    spec === "@convex-dev/eslint-plugin" ||
+    spec.endsWith("/eslint-plugin")
+  ) {
+    return null;
+  }
+  const mapped = COMMUNITY_COMPONENT_PACKAGES[spec];
+  if (mapped) return mapped;
+  if (spec.startsWith("@convex-dev/")) {
+    return spec.slice("@convex-dev/".length);
+  }
+  return null;
+}
+
+function nameFromConfigImport(source: string): string | null {
+  const fromMap = canonicalComponentName(source);
+  if (fromMap) return fromMap;
+  if (source.startsWith("@convex-dev/")) return null; // eslint-plugin already dropped
+  if (source.startsWith("@")) {
+    const last = source.split("/").filter(Boolean).pop() ?? source;
+    if (last.endsWith("-convex")) return last.slice(0, -"-convex".length);
+    return source;
+  }
+  const parts = source.split("/").filter((p) => p && p !== ".");
+  const name = parts[parts.length - 1];
+  if (!name) return null;
+  return COMMUNITY_COMPONENT_PACKAGES[name] ?? name;
+}
+
 // Extract Convex component names INSTALLED via package.json deps
-// (@convex-dev/*) and convex.config.ts imports of */convex.config.
-// Installation alone earns nothing; see extractComponentsUsed.
+// (@convex-dev/* plus known community packages) and convex.config.ts
+// imports of */convex.config. Installation alone earns nothing; see
+// extractComponentsUsed.
 function extractComponents(
   packageJsonRaw: string | null,
   convexConfigRaw: string | null,
@@ -132,12 +176,8 @@ function extractComponents(
         ...Object.keys(pkg.devDependencies || {}),
       ];
       for (const dep of deps) {
-        if (
-          dep.startsWith("@convex-dev/") &&
-          dep !== "@convex-dev/eslint-plugin"
-        ) {
-          found.add(dep.replace("@convex-dev/", ""));
-        }
+        const name = canonicalComponentName(dep);
+        if (name) found.add(name);
       }
     } catch {
       // Unparseable package.json: fall back to config imports only
@@ -148,17 +188,8 @@ function extractComponents(
     const importRegex = /from\s+["']([^"']+)\/convex\.config(?:\.js)?["']/g;
     let match;
     while ((match = importRegex.exec(convexConfigRaw))) {
-      const source = match[1];
-      if (source.startsWith("@convex-dev/")) {
-        found.add(source.replace("@convex-dev/", ""));
-      } else if (source.startsWith("@")) {
-        found.add(source);
-      } else {
-        // Local component folder: use the last path segment as its name
-        const parts = source.split("/").filter((p) => p && p !== ".");
-        const name = parts[parts.length - 1];
-        if (name) found.add(name);
-      }
+      const name = nameFromConfigImport(match[1]);
+      if (name) found.add(name);
     }
   }
 
@@ -182,7 +213,12 @@ function detectAuthProviderFromDeps(
       ...Object.keys(pkg.devDependencies || {}),
     ];
     if (deps.some((d) => d.startsWith("@clerk/"))) return "Clerk";
-    if (deps.some((d) => d.startsWith("@workos-inc/"))) return "WorkOS";
+    if (
+      deps.some((d) => d.startsWith("@workos-inc/")) ||
+      deps.includes("@convex-dev/workos-authkit")
+    ) {
+      return "WorkOS";
+    }
     if (deps.includes("@convex-dev/auth")) return "Convex Auth";
     if (
       deps.includes("better-auth") ||
@@ -286,6 +322,12 @@ export function detectAiModelEvidence(fileContentsByPath: Map<string, string>): 
     const stripped = stripComments(raw);
 
     if (/\bconvexGateway\s*\(/.test(stripped)) {
+      usesAiGateway = true;
+    }
+    if (
+      /from\s+["']@convex-dev\/ai["']/.test(stripped) ||
+      /https?:\/\/[^\s"'`]*convex[^"'`]*\/v1\/chat\/completions/.test(stripped)
+    ) {
       usesAiGateway = true;
     }
     const gatewayRegex = /\bconvexGateway\(\s*["'`]([^"'`]+)["'`]/g;
@@ -721,28 +763,28 @@ async function fetchGithubContext(
   const packageJsonRaw = packageJsonPath
     ? (fileContentsByPath.get(packageJsonPath) ?? null)
     : null;
-  const convexConfigPath = factFiles.find((p) =>
+  const convexConfigPaths = factFiles.filter((p) =>
     /(^|\/)convex\/convex\.config\.ts$/.test(p),
   );
-  const convexConfigRaw = convexConfigPath
-    ? (fileContentsByPath.get(convexConfigPath) ?? null)
-    : null;
-
-  const componentsInstalled = extractComponents(
-    packageJsonRaw,
-    convexConfigRaw,
-  );
-  const componentsUsed = extractComponentsUsed(
-    fileContentsByPath,
-    componentsInstalled,
-  );
-  const repoFacts = extractConvexFacts(filePaths, fileContentsByPath);
 
   // All fetched manifests: root package.json plus workspace manifests
   const manifestRaws: Array<string | null> = [
     packageJsonRaw,
     ...workspaceManifestPaths.map((p) => fileContentsByPath.get(p) ?? null),
   ];
+  const componentsInstalled = [
+    ...new Set([
+      ...manifestRaws.flatMap((raw) => extractComponents(raw, null)),
+      ...convexConfigPaths.flatMap((path) =>
+        extractComponents(null, fileContentsByPath.get(path) ?? null),
+      ),
+    ]),
+  ].sort();
+  const componentsUsed = extractComponentsUsed(
+    fileContentsByPath,
+    componentsInstalled,
+  );
+  const repoFacts = extractConvexFacts(filePaths, fileContentsByPath);
   const aiModelEvidence = detectAiModelEvidence(fileContentsByPath);
 
   // Build the prompt summary from the narrower prompt subset with char budgets
@@ -1081,6 +1123,7 @@ function detectHarnessSignals(
 function buildFeaturesFromFacts(
   facts: RepoFacts,
   componentsUsed: Array<string>,
+  extras?: { authProvider?: string; usesAiGateway?: boolean },
 ): Array<string> {
   const features: Array<string> = [];
   if (facts.hasSchema && facts.tableCount > 0) {
@@ -1097,12 +1140,43 @@ function buildFeaturesFromFacts(
   if (facts.vectorIndexCount > 0 || facts.usesVectorSearch) {
     features.push("vector search");
   }
-  if (facts.usesAuth) features.push("auth");
+  const authProvider = extras?.authProvider;
+  if (facts.usesAuth) {
+    features.push(
+      authProvider && authProvider !== "none"
+        ? `auth (${authProvider})`
+        : "auth",
+    );
+  } else if (authProvider && authProvider !== "none") {
+    features.push(`auth (${authProvider})`);
+  }
   if (facts.usesPagination) features.push("pagination");
+  if (extras?.usesAiGateway) features.push("AI Gateway");
   for (const component of componentsUsed) {
     features.push(`component: ${component}`);
   }
   return features;
+}
+
+// Convex markers visible on a live page when the repo is private or missing.
+// Never treated as repo facts; only used as a fallback feature list.
+export function detectLiveConvexSignals(markdown: string): Array<string> {
+  if (!markdown) return [];
+  const signals: Array<string> = [];
+  if (/\.convex\.cloud|\.convex\.site/i.test(markdown)) {
+    signals.push("convex deployment host");
+  }
+  if (
+    /ConvexProvider|convex\/react|useQuery\s*\(|useMutation\s*\(/i.test(
+      markdown,
+    )
+  ) {
+    signals.push("convex react client");
+  }
+  if (/CONVEX_URL|VITE_CONVEX_URL|NEXT_PUBLIC_CONVEX_URL/i.test(markdown)) {
+    signals.push("convex url env");
+  }
+  return signals;
 }
 
 // Deterministic liveness check of the submission's live app URL (never social
@@ -1463,6 +1537,54 @@ async function fetchHackathonManifest(
   }
 }
 
+// Fetch published /hackathon.md from the live app origin. Third fallback
+// after the repo file and a pasted log. HTML responses (SPA catch-all) are
+// rejected so index.html is never treated as a log.
+async function fetchLiveHackathonMd(
+  url: string | undefined,
+): Promise<ManifestContext> {
+  if (!url) return { fetched: false, content: "" };
+  let origin: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { fetched: false, content: "" };
+    }
+    origin = parsed.origin;
+  } catch {
+    return { fetched: false, content: "" };
+  }
+
+  const mdUrl = `${origin}/hackathon.md`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(mdUrl, {
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return { fetched: false, content: "" };
+    const text = await res.text();
+    const trimmed = text.trim();
+    if (!trimmed) return { fetched: false, content: "" };
+    if (/^<!doctype html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
+      return { fetched: false, content: "" };
+    }
+    const redacted = redactSecrets(trimmed);
+    return {
+      fetched: true,
+      url: mdUrl,
+      content:
+        redacted.length > MAX_LOG_FILE_CHARS
+          ? redacted.slice(0, MAX_LOG_FILE_CHARS) + "\n... (truncated)"
+          : redacted,
+    };
+  } catch {
+    return { fetched: false, content: "" };
+  }
+}
+
 // Build the system prompt from the group's effective rubric and optional
 // custom prompt body. The {{rubric}} placeholder expands to the numbered
 // criteria list; if a custom body omits the placeholder the rubric block is
@@ -1563,6 +1685,7 @@ function buildUserMessage(
   manifest: ManifestContext,
   video: VideoContext,
   frontendHosting: FrontendHosting | undefined,
+  liveHackathonMd?: ManifestContext,
 ): string {
   const sections: Array<string> = [
     `SUBMISSION: ${data.title}`,
@@ -1611,6 +1734,12 @@ function buildUserMessage(
     }`,
   );
 
+  if (repo.fetched && repo.authProviderFromDeps) {
+    sections.push(
+      `\n=== AUTH PROVIDER (detected from package.json / auth config; authoritative) ===\nProvider: ${repo.authProviderFromDeps}\nConvex Auth covers the published library and the v2 alpha (@convex-dev/auth). ctx.auth usage is listed separately in VERIFIED CONVEX FACTS.`,
+    );
+  }
+
   // AI model evidence detected from convex/ source (convexGateway calls and
   // SDK model literals). Code facts, same standing as usesAuth and the
   // component list; the model must not contradict them.
@@ -1655,6 +1784,14 @@ function buildUserMessage(
         `--- FILE: hackathon.md (pasted at submission; self-reported) ---\n${pasted}`,
       );
     }
+  } else if (
+    !repoHasHackathonMd &&
+    liveHackathonMd?.fetched &&
+    liveHackathonMd.content
+  ) {
+    logEntries.push(
+      `--- FILE: hackathon.md (published at ${liveHackathonMd.url ?? "live origin"}; self-reported) ---\n${liveHackathonMd.content}`,
+    );
   }
   if (logEntries.length > 0) {
     sections.push(
@@ -1687,6 +1824,15 @@ function buildUserMessage(
       ? `\n=== LIVE SITE CONTENT (scraped) ===\n${scrape.markdown}`
       : "\n=== LIVE SITE CONTENT ===\nNot available.",
   );
+
+  if (!repo.fetched && scrape.fetched) {
+    const liveSignals = detectLiveConvexSignals(scrape.markdown);
+    if (liveSignals.length > 0) {
+      sections.push(
+        `\n=== LIVE SITE CONVEX SIGNALS (no repo; detected from scraped page; not a substitute for code facts) ===\n${liveSignals.join(", ")}`,
+      );
+    }
+  }
 
   // Video demo transcript: unverified builder narrative. Missing transcripts
   // must never lower any score since videos are optional submissions.
@@ -2065,7 +2211,7 @@ export const analyzeSubmission = internalAction({
       const parsedRepoUrl = data.githubUrl
         ? parseGithubUrl(data.githubUrl)
         : null;
-      const [repo, commitHistory, scrape, liveness, manifest, video] =
+      const [repo, commitHistory, scrape, liveness, manifest, video, liveHackathonMd] =
         await Promise.all([
           fetchGithubContext(data.githubUrl),
           fetchCommitHistory(parsedRepoUrl),
@@ -2073,6 +2219,7 @@ export const analyzeSubmission = internalAction({
           checkUrlLiveness(data.url),
           fetchHackathonManifest(data.url),
           fetchVideoContext(ctx, data.storyId, data.videoUrl),
+          fetchLiveHackathonMd(data.url),
         ]);
       const urlCheckRaw = liveness.check;
 
@@ -2100,7 +2247,10 @@ export const analyzeSubmission = internalAction({
       const repoHackathonMd = repo.logFiles.find((f) =>
         /^hackathon\.md$/i.test(f.path),
       );
-      const effectiveLog = repoHackathonMd?.content ?? data.hackathonLog;
+      const effectiveLog =
+        repoHackathonMd?.content ??
+        data.hackathonLog ??
+        (liveHackathonMd.fetched ? liveHackathonMd.content : undefined);
       const logHeader = effectiveLog
         ? parseHackathonLogHeader(effectiveLog)
         : undefined;
@@ -2133,6 +2283,7 @@ export const analyzeSubmission = internalAction({
         manifest,
         video,
         frontendHosting,
+        liveHackathonMd,
       );
 
       // One retry on parse failure: re-ask the same provider chain
@@ -2227,9 +2378,15 @@ export const analyzeSubmission = internalAction({
       }
 
       // Feature list is now derived from verified facts, not model output
+      const liveConvexSignals = repo.fetched
+        ? []
+        : detectLiveConvexSignals(scrape.markdown);
       const convexFeaturesDetected = repo.repoFacts
-        ? buildFeaturesFromFacts(repo.repoFacts, repo.componentsUsed)
-        : [];
+        ? buildFeaturesFromFacts(repo.repoFacts, repo.componentsUsed, {
+            authProvider: repo.authProviderFromDeps,
+            usesAiGateway: repo.usesAiGateway,
+          })
+        : liveConvexSignals.map((signal) => `live site: ${signal}`);
 
       await ctx.runMutation(internal.aiJudge.saveResult, {
         resultId: args.resultId,
@@ -2256,6 +2413,12 @@ export const analyzeSubmission = internalAction({
           logDiscrepancies:
             logDiscrepancies.length > 0 ? logDiscrepancies : undefined,
           hackathonLogEvent: logHeader?.event,
+          authProvider: repo.authProviderFromDeps,
+          usesAiGateway: repo.fetched ? repo.usesAiGateway : undefined,
+          aiModelIdsDetected:
+            repo.aiModelIdsDetected.length > 0
+              ? repo.aiModelIdsDetected
+              : undefined,
         },
       });
     } catch (error) {

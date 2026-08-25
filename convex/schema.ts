@@ -821,6 +821,13 @@ export default defineSchema({
     // Event free text from the hackathon.md header (repo copy wins over a
     // pasted one). Shown beside track info in admin results; never scored.
     hackathonLogEvent: v.optional(v.string()),
+    // Auth library detected from package.json / auth config (Clerk, WorkOS,
+    // Convex Auth, Better Auth, or "none"). Independent of ctx.auth usage.
+    authProvider: v.optional(v.string()),
+    // True when convexGateway( appears in fetched convex/ source
+    usesAiGateway: v.optional(v.boolean()),
+    // Model ids from convexGateway("provider/model") and SDK model literals
+    aiModelIdsDetected: v.optional(v.array(v.string())),
     editedBy: v.optional(v.id("users")), // Admin who last edited scores
     editedAt: v.optional(v.number()), // When scores were last edited
   })

@@ -423,6 +423,31 @@ export default function AIJudgeResultsPage() {
                           </div>
                         )}
 
+                      {(result.authProvider &&
+                        result.authProvider !== "none") ||
+                      result.usesAiGateway ? (
+                        <div className="flex flex-wrap gap-2">
+                          {result.authProvider &&
+                            result.authProvider !== "none" && (
+                              <span className="px-2.5 py-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full">
+                                {result.authProvider}
+                              </span>
+                            )}
+                          {result.usesAiGateway && (
+                            <span
+                              className="px-2.5 py-1 text-xs bg-green-50 text-green-700 border border-green-200 rounded-full"
+                              title={
+                                result.aiModelIdsDetected?.length
+                                  ? result.aiModelIdsDetected.join(", ")
+                                  : undefined
+                              }
+                            >
+                              AI Gateway
+                            </span>
+                          )}
+                        </div>
+                      ) : null}
+
                       {/* Convex components: used vs installed */}
                       {((result.componentsUsed?.length ?? 0) > 0 ||
                         (result.componentsDetected?.length ?? 0) > 0) && (

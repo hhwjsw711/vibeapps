@@ -4,6 +4,8 @@ Brief description of the feature and its purpose.
 
 ## Recently Completed
 
+- 2026-08-25 09:45 UTC - AI Hackathon Report, Convex Recap, and Best Use of Convex stats now store and show auth provider plus Convex AI Gateway. No hackathon.md still uses the repo scan; live `/hackathon.md` and live-site Convex signals cover private or missing repos. Community Convex components are detected. No new component install on this app (Firecrawl and Context.dev already cover scrape and transcripts). PRD: prds/ai-judge-auth-gateway-report-facts.md. Files: convex/schema.ts, convex/aiJudge.ts, convex/aiJudgeAnalysis.ts, src/components/admin/AIJudgeResults.tsx, src/pages/AIJudgeResultsPage.tsx.
+
 - 2026-08-25 09:20 UTC - AI judge aligned with the published All Gas hackathon skill: AI Gateway plus model id detection from convex/ source (`usesAiGateway`, `aiModelIdsDetected` on RepoContext), a fourth recorded-only AI models cross-check, and monorepo-aware auth evidence with auth.config.ts/auth.ts file-signal fallbacks. Verified with detector unit runs and two end-to-end dev submissions (codex-sites host detection, private pasted log, duplicate URL guard), all fixtures cleaned up. Files: convex/aiJudgeAnalysis.ts.
 
 - 2026-08-25 06:15 UTC - Judging group Email submission owners can include the Hackathon Team Info names and emails through a Team members dropdown. PRD: prds/judging-group-email-team-members.md.

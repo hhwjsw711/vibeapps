@@ -44,7 +44,7 @@ type CriteriaScore = {
 
 // Features that count as "advanced" Convex usage for the stats rollup
 const ADVANCED_FEATURE_REGEX =
-  /schedul|cron|file storage|storage|full.?text|search|vector|http action|component|agent|workflow|workpool|aggregate/i;
+  /schedul|cron|file storage|storage|full.?text|search|vector|http action|component|agent|workflow|workpool|aggregate|ai gateway|gateway/i;
 
 // Display labels for detected frontend hosting platforms (keys match
 // AI_FRONTEND_PLATFORMS in convex/aiJudge.ts)
@@ -69,6 +69,8 @@ type StatsResult = {
     liveUrl: boolean;
     videoTranscript?: boolean;
   };
+  authProvider?: string;
+  usesAiGateway?: boolean;
 };
 
 // Rollup numbers for the Stats tab and the report overview
@@ -126,6 +128,22 @@ function computeStats(results: Array<StatsResult>) {
     (a, b) => b[1] - a[1],
   );
 
+  const usingAuth = (r: StatsResult) =>
+    (r.authProvider !== undefined && r.authProvider !== "none") ||
+    (r.convexFeaturesDetected || []).some((f) => /^auth\b/i.test(f));
+  const usingAiGateway = (r: StatsResult) =>
+    r.usesAiGateway === true ||
+    (r.convexFeaturesDetected || []).some((f) => /ai gateway/i.test(f));
+  const authProviderCounts = new Map<string, number>();
+  for (const r of completed) {
+    if (!r.authProvider || r.authProvider === "none") continue;
+    const key = r.authProvider;
+    authProviderCounts.set(key, (authProviderCounts.get(key) || 0) + 1);
+  }
+  const authProviders = [...authProviderCounts.entries()].sort(
+    (a, b) => b[1] - a[1],
+  );
+
   // Average-score distribution bands for the mini chart
   const bands = [
     { label: "9-10", min: 9, max: 10.01, count: 0 },
@@ -146,6 +164,9 @@ function computeStats(results: Array<StatsResult>) {
     advancedConvex: completed.filter(usesAdvanced).length,
     usingComponents: completed.filter(usesComponents).length,
     componentsUsed,
+    usingAuth: completed.filter(usingAuth).length,
+    usingAiGateway: completed.filter(usingAiGateway).length,
+    authProviders,
     liveApps: completed.filter((r) => r.urlCheck?.isLive).length,
     urlChecked: completed.filter((r) => r.urlCheck !== undefined).length,
     reposAnalyzed: completed.filter((r) => r.sourcesUsed?.github).length,
@@ -174,6 +195,9 @@ type ReportSubmission = {
   componentsUsed?: Array<string>;
   repoFacts?: RepoFactsSummary;
   gitFacts?: GitFactsSummary;
+  authProvider?: string;
+  usesAiGateway?: boolean;
+  aiModelIdsDetected?: Array<string>;
   urlCheck?: {
     checkedUrl?: string;
     isLive: boolean;
@@ -244,6 +268,9 @@ type SubmissionBrief = {
   };
   frontendHosting?: { platform: string; evidence: string };
   logDiscrepancies?: Array<string>;
+  authProvider?: string;
+  usesAiGateway?: boolean;
+  aiModelIdsDetected?: Array<string>;
   sourcesUsed?: {
     github: boolean;
     liveUrl: boolean;
@@ -315,6 +342,18 @@ function submissionBriefLines(
   lines.push(
     `- Detected Convex features: ${submission.convexFeaturesDetected?.length ? submission.convexFeaturesDetected.join(", ") : "none recorded"}`,
   );
+  if (submission.authProvider && submission.authProvider !== "none") {
+    lines.push(`- Auth provider: ${submission.authProvider}`);
+  } else if (submission.authProvider === "none") {
+    lines.push("- Auth provider: none detected");
+  }
+  if (submission.usesAiGateway) {
+    lines.push(
+      `- Convex AI Gateway: yes${submission.aiModelIdsDetected?.length ? ` (${submission.aiModelIdsDetected.join(", ")})` : ""}`,
+    );
+  } else if (submission.usesAiGateway === false) {
+    lines.push("- Convex AI Gateway: no");
+  }
 
   lines.push("", `${heading}# Review checks`, "");
   if (submission.urlCheck) {
@@ -377,6 +416,8 @@ function buildConvexTeamRecap(
     `- ${completed.length} completed reviews from ${submissions.length} submissions`,
     `- ${stats.usingConvex} apps with detected Convex usage`,
     `- ${stats.advancedConvex} apps with advanced Convex usage`,
+    `- ${stats.usingAuth} apps with a detected auth provider`,
+    `- ${stats.usingAiGateway} apps using Convex AI Gateway`,
     `- ${stats.liveApps} live apps from ${stats.urlChecked} checked URLs`,
     `- ${stats.reposAnalyzed} repositories analyzed`,
     `- ${stats.averageScore}/10 average AI review score`,
@@ -384,6 +425,8 @@ function buildConvexTeamRecap(
     "## Cohort signals",
     "",
     `- Components used in code: ${stats.componentsUsed.length > 0 ? stats.componentsUsed.map(([name, count]) => `${name} (${count})`).join(", ") : "none verified"}`,
+    `- Auth providers: ${stats.authProviders.length > 0 ? stats.authProviders.map(([name, count]) => `${name} (${count})`).join(", ") : "none detected"}`,
+    `- Convex AI Gateway: ${stats.usingAiGateway} of ${stats.completed} reviewed apps`,
     `- Top Convex features: ${stats.topFeatures.length > 0 ? stats.topFeatures.map(([name, count]) => `${name} (${count})`).join(", ") : "none recorded"}`,
   ];
 
@@ -460,6 +503,10 @@ function buildHackathonReport(
   lines.push(
     `| Apps using Convex components | ${stats.usingComponents}${stats.componentsUsed.length > 0 ? ` (${stats.componentsUsed.length} distinct: ${stats.componentsUsed.map(([name]) => name).join(", ")})` : ""} |`,
   );
+  lines.push(
+    `| Apps with detected auth | ${stats.usingAuth}${stats.authProviders.length > 0 ? ` (${stats.authProviders.map(([name, count]) => `${name} ${count}`).join(", ")})` : ""} |`,
+  );
+  lines.push(`| Apps using Convex AI Gateway | ${stats.usingAiGateway} |`);
   lines.push(
     `| Live apps at review time | ${stats.liveApps} of ${stats.urlChecked} checked |`,
   );
@@ -556,6 +603,18 @@ function buildHackathonReport(
     const reportComponents = s.componentsUsed ?? s.componentsDetected;
     if (reportComponents && reportComponents.length > 0) {
       lines.push(`- Convex components used: ${reportComponents.join(", ")}`);
+    }
+    if (s.authProvider && s.authProvider !== "none") {
+      lines.push(`- Auth provider: ${s.authProvider}`);
+    } else if (s.authProvider === "none") {
+      lines.push("- Auth provider: none detected");
+    }
+    if (s.usesAiGateway) {
+      lines.push(
+        `- Convex AI Gateway: yes${s.aiModelIdsDetected?.length ? ` (${s.aiModelIdsDetected.join(", ")})` : ""}`,
+      );
+    } else if (s.usesAiGateway === false) {
+      lines.push("- Convex AI Gateway: no");
     }
     if (s.criteriaScores && s.criteriaScores.length > 0) {
       lines.push(
@@ -1495,6 +1554,27 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                                 {result.hackathonLogEvent}
                               </span>
                             )}
+                            {result.authProvider &&
+                              result.authProvider !== "none" && (
+                                <span
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200"
+                                  title="Auth library detected from package.json or convex/auth config. Independent of hackathon.md."
+                                >
+                                  {result.authProvider}
+                                </span>
+                              )}
+                            {result.usesAiGateway && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-green-50 text-green-700 border-green-200"
+                                title={
+                                  result.aiModelIdsDetected?.length
+                                    ? `Convex AI Gateway used. Models: ${result.aiModelIdsDetected.join(", ")}`
+                                    : "convexGateway() found in convex/ source"
+                                }
+                              >
+                                AI Gateway
+                              </span>
+                            )}
                             {(result.logDiscrepancies?.length ?? 0) > 0 && (
                               <span
                                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200"
@@ -1985,9 +2065,21 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                                       : "bg-surface-alt text-faint border-hairline"
                                   }`}
                                 >
-                                  {label}
+                                  {label === "auth" &&
+                                  result.authProvider &&
+                                  result.authProvider !== "none"
+                                    ? `auth (${result.authProvider})`
+                                    : label}
                                 </span>
                               ))}
+                              {result.usesAiGateway && (
+                                <span className="px-2 py-0.5 text-xs rounded-full border bg-green-50 text-green-700 border-green-200">
+                                  AI Gateway
+                                  {result.aiModelIdsDetected?.length
+                                    ? ` (${result.aiModelIdsDetected.join(", ")})`
+                                    : ""}
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}
@@ -2190,6 +2282,21 @@ function StatsPanel({
           : "from package.json / convex.config.ts",
     },
     {
+      label: "Using auth",
+      value: `${stats.usingAuth}`,
+      sub:
+        stats.authProviders.length > 0
+          ? stats.authProviders
+              .map(([name, count]) => `${name} ${count}`)
+              .join(", ")
+          : "Clerk, WorkOS, Convex Auth, Better Auth",
+    },
+    {
+      label: "Using AI Gateway",
+      value: `${stats.usingAiGateway}`,
+      sub: "convexGateway() in convex/ source",
+    },
+    {
       label: "Live apps",
       value: `${stats.liveApps}`,
       sub:
@@ -2315,6 +2422,45 @@ function StatsPanel({
           )}
         </div>
 
+        {/* Auth providers detected from package.json / auth config */}
+        <div>
+          <h4 className="text-sm font-medium text-ink mb-3">
+            Auth providers detected
+          </h4>
+          {stats.authProviders.length === 0 ? (
+            <p className="text-sm text-soft">
+              No auth library detected yet. Clerk, WorkOS, Convex Auth (including
+              v2 alpha), and Better Auth are read from package.json and
+              convex/auth config during the review.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {stats.authProviders.map(([provider, count]) => (
+                <div key={provider} className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-0.5">
+                      <span className="text-sm text-copy truncate">
+                        {provider}
+                      </span>
+                      <span className="text-xs text-soft flex-shrink-0">
+                        {count} app{count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-surface-alt rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-cta rounded-full"
+                        style={{
+                          width: `${(count / Math.max(1, ...stats.authProviders.map(([, c]) => c))) * 100}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Score distribution */}
         <div>
           <h4 className="text-sm font-medium text-ink mb-3">
@@ -2343,10 +2489,14 @@ function StatsPanel({
 
       <p className="text-xs text-faint pt-2 border-t border-hairline">
         Generated by the vibeapps AI Judge. "Using Convex" counts apps with at
-        least one detected Convex feature; "Advanced" counts scheduler, crons,
-        file storage, search, vector, HTTP actions, components, or agents.
-        Components are detected from each repo's package.json and
-        convex.config.ts and raise the advanced score.
+        least one detected Convex feature from the repo, or live-site Convex
+        signals when the repo is private or missing. A missing hackathon.md is
+        not a penalty. "Advanced" counts scheduler, crons, file storage, search,
+        vector, HTTP actions, components, agents, or AI Gateway. Auth and AI
+        Gateway are measured from source (Clerk, WorkOS, Convex Auth including
+        v2, Better Auth, and convexGateway()). Components are detected from
+        each repo's package.json and convex.config.ts, including official
+        @convex-dev packages and known community components.
       </p>
     </div>
   );

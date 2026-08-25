@@ -124,7 +124,8 @@ Rules:
 - If the live URL is dead, 404, or missing, also flag that fact explicitly in overallReasoning. Do NOT lower the other five Convex criteria because of it; the ranking should stay mostly about Convex usage.
 - Convex components: only components listed as USED IN CODE (referenced via components.<name> in source) count toward the "advanced" score. Components that are installed in package.json or convex.config.ts but never referenced in code earn NOTHING; do not raise any score for them. A submission that uses one or more components well should generally score 7 or higher on "advanced", and thoughtful multi-component usage can justify 9-10. Name each used component in your "advanced" reasoning.
 - The GIT HISTORY section (when present) is context about the build timeline. It is informational; do not add or remove points for commit counts or timeline shape on their own.
-- The PROJECT LOG FILES and PUBLISHED HACKATHON MANIFEST sections (when present) are self-reported by the team: hackathon logs, changelogs, task lists, and the published manifest. Use them as context for what was built and when, but the VERIFIED CONVEX FACTS always win over self-reported claims. If the manifest claims components or features the facts do not show, note the gap in your reasoning.
+- The AUTH PROVIDER and AI MODEL EVIDENCE sections (when present) are measured from source the same way VERIFIED CONVEX FACTS are. Never contradict them. Name the detected auth library and Convex AI Gateway use (or its absence) in reasoning when those sections exist. Do not invent an auth provider or gateway use the facts do not show.
+- The PROJECT LOG FILES and PUBLISHED HACKATHON MANIFEST sections (when present) are self-reported by the team: hackathon logs, changelogs, task lists, and the published manifest. Use them as context for what was built and when, but the VERIFIED CONVEX FACTS always win over self-reported claims. If the manifest claims components or features the facts do not show, note the gap in your reasoning. A missing hackathon.md is not a penalty; judge from repo and live-app evidence.
 - Be specific in reasoning: name actual files, functions, tables, or features you observed.`;
 
 // Limits for admin-editable AI settings
@@ -283,6 +284,9 @@ const aiResultValidator = v.object({
   logDiscrepancies: v.optional(v.array(v.string())),
   // Event free text from the repo or pasted hackathon.md header; admin only
   hackathonLogEvent: v.optional(v.string()),
+  authProvider: v.optional(v.string()),
+  usesAiGateway: v.optional(v.boolean()),
+  aiModelIdsDetected: v.optional(v.array(v.string())),
   editedAt: v.optional(v.number()),
 });
 
@@ -394,6 +398,9 @@ async function enrichResults(
     frontendHosting?: { platform: string; evidence: string };
     logDiscrepancies?: Array<string>;
     hackathonLogEvent?: string;
+    authProvider?: string;
+    usesAiGateway?: boolean;
+    aiModelIdsDetected?: Array<string>;
     editedAt?: number;
   }> = [];
 
@@ -444,6 +451,9 @@ async function enrichResults(
             ? parseHackathonLogHeader(story.hackathonLog).event
             : undefined))
         : undefined,
+      authProvider: result.authProvider,
+      usesAiGateway: result.usesAiGateway,
+      aiModelIdsDetected: result.aiModelIdsDetected,
       editedAt: result.editedAt,
     });
   }
@@ -1047,6 +1057,9 @@ export const getGroupAiReportData = query({
           selfReportedModel: v.optional(v.string()),
           urlCheck: v.optional(urlCheckValidator),
           frontendHosting: v.optional(frontendHostingValidator),
+          authProvider: v.optional(v.string()),
+          usesAiGateway: v.optional(v.boolean()),
+          aiModelIdsDetected: v.optional(v.array(v.string())),
           sourcesUsed: v.optional(
             v.object({
               github: v.boolean(),
@@ -1107,6 +1120,9 @@ export const getGroupAiReportData = query({
         note: string;
       };
       frontendHosting?: { platform: string; evidence: string };
+      authProvider?: string;
+      usesAiGateway?: boolean;
+      aiModelIdsDetected?: Array<string>;
       sourcesUsed?: {
         github: boolean;
         liveUrl: boolean;
@@ -1152,6 +1168,9 @@ export const getGroupAiReportData = query({
         selfReportedModel: story.selfReportedModel,
         urlCheck: row.urlCheck,
         frontendHosting: row.frontendHosting,
+        authProvider: row.authProvider,
+        usesAiGateway: row.usesAiGateway,
+        aiModelIdsDetected: row.aiModelIdsDetected,
         sourcesUsed: row.sourcesUsed,
         error: row.error,
       });
@@ -1381,6 +1400,9 @@ export const saveResult = internalMutation({
         logDiscrepancies: v.optional(v.array(v.string())),
         // Event free text from the hackathon.md header (repo copy wins)
         hackathonLogEvent: v.optional(v.string()),
+        authProvider: v.optional(v.string()),
+        usesAiGateway: v.optional(v.boolean()),
+        aiModelIdsDetected: v.optional(v.array(v.string())),
       }),
       v.object({
         kind: v.literal("error"),
@@ -1427,6 +1449,9 @@ export const saveResult = internalMutation({
         frontendHosting: args.outcome.frontendHosting,
         logDiscrepancies: args.outcome.logDiscrepancies,
         hackathonLogEvent: args.outcome.hackathonLogEvent,
+        authProvider: args.outcome.authProvider,
+        usesAiGateway: args.outcome.usesAiGateway,
+        aiModelIdsDetected: args.outcome.aiModelIdsDetected,
         error: undefined,
         editedBy: undefined,
         editedAt: undefined,
