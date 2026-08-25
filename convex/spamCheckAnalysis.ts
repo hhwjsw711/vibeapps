@@ -1,5 +1,6 @@
 import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
+import { callLlm, type LlmResult } from "./lib/llm";
 import { internal, components } from "./_generated/api";
 import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
 
@@ -192,134 +193,21 @@ function extractMarkdown(response: unknown): string | undefined {
   return undefined;
 }
 
-type LlmResult = {
-  text: string;
-  provider: string;
-  model: string;
-};
-
-// Anthropic Messages API (same pattern as the AI judge)
-async function callAnthropic(
-  systemPrompt: string,
-  userMessage: string,
-): Promise<LlmResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-  const model = "claude-sonnet-4-5";
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1500,
-      temperature: 0.1,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
-  }
-  const json = (await res.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
-  const text = (json.content || [])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text || "")
-    .join("");
-  if (!text) throw new Error("Anthropic returned empty response");
-  return { text, provider: "anthropic", model };
-}
-
-// OpenAI-compatible chat completions endpoint (OpenAI and OpenRouter)
-async function callOpenAiCompatible(
-  endpoint: string,
-  apiKey: string,
-  model: string,
-  provider: string,
-  systemPrompt: string,
-  userMessage: string,
-): Promise<LlmResult> {
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.1,
-      max_tokens: 1500,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`${provider} API error ${res.status}: ${await res.text()}`);
-  }
-  const json = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${provider} returned empty response`);
-  return { text, provider, model };
-}
-
-// Provider fallback chain: Anthropic, then OpenAI, then OpenRouter.
-// Returns null when no provider is configured so the heuristic can take over.
-async function callLlmWithFallback(
+// Returns null when the gateway call fails so the heuristic can take over.
+// A deployment without gateway access (free plan, self-hosted) lands here,
+// and the saved result records provider "heuristic" rather than a model.
+async function callLlmOrNull(
   systemPrompt: string,
   userMessage: string,
 ): Promise<LlmResult | null> {
-  const errors: Array<string> = [];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      return await callAnthropic(systemPrompt, userMessage);
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "Anthropic failed");
-    }
+  try {
+    return await callLlm(systemPrompt, userMessage, {
+      maxOutputTokens: 1500,
+      temperature: 0.1,
+    });
+  } catch {
+    return null;
   }
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      return await callOpenAiCompatible(
-        "https://api.openai.com/v1/chat/completions",
-        process.env.OPENAI_API_KEY,
-        "gpt-4o",
-        "openai",
-        systemPrompt,
-        userMessage,
-      );
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "OpenAI failed");
-    }
-  }
-  if (process.env.OPENROUTER_API_KEY) {
-    try {
-      return await callOpenAiCompatible(
-        "https://openrouter.ai/api/v1/chat/completions",
-        process.env.OPENROUTER_API_KEY,
-        "anthropic/claude-sonnet-4.5",
-        "openrouter",
-        systemPrompt,
-        userMessage,
-      );
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "OpenRouter failed");
-    }
-  }
-
-  // No key configured at all: heuristic fallback instead of a hard failure
-  if (errors.length === 0) return null;
-  throw new Error(`All configured AI providers failed: ${errors.join(" | ")}`);
 }
 
 type Verdict = "spam" | "suspicious" | "clean";
@@ -579,14 +467,14 @@ export const analyzeSubmission = internalAction({
         linksChecked: extraLinkChecks,
       };
 
-      // 3. LLM verdict, or heuristic when no provider key is configured.
+      // 3. LLM verdict, or heuristic when the gateway call fails.
       // Uses the admin-editable system prompt (default when no override set).
       const systemPrompt: string = await ctx.runQuery(
         internal.spamCheck.getSpamPromptInternal,
         {},
       );
       const userMessage = buildUserMessage(story, signals, scrapedMarkdown);
-      const llmResult = await callLlmWithFallback(systemPrompt, userMessage);
+      const llmResult = await callLlmOrNull(systemPrompt, userMessage);
 
       let parsed: ParsedVerdict;
       let provider: string;
