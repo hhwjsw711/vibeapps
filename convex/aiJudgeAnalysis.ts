@@ -63,6 +63,12 @@ type RepoContext = {
   // "WorkOS", "Convex Auth", "Better Auth", or "none"). Undefined when the
   // repo or its package.json was not readable.
   authProviderFromDeps?: string;
+  // True when a convexGateway( call appears in fetched convex/ source
+  // (Convex AI Gateway use; https://docs.convex.dev/ai-gateway/overview)
+  usesAiGateway: boolean;
+  // Model ids found in fetched convex/ source: convexGateway("provider/model")
+  // string literals plus model ids passed to OpenAI/Anthropic SDK clients
+  aiModelIdsDetected: Array<string>;
   // Agent skills present in the repo (.agents/skills/*/SKILL.md and similar)
   skillPaths: Array<string>;
   repoMeta?: {
@@ -188,6 +194,116 @@ function detectAuthProviderFromDeps(
   } catch {
     return undefined;
   }
+}
+
+// True when any fetched manifest lists @convex-dev/auth (the Convex Auth
+// beta and the v2 alpha share this package name)
+function manifestsHaveConvexAuthDep(
+  manifestRaws: Array<string | null>,
+): boolean {
+  for (const raw of manifestRaws) {
+    if (!raw) continue;
+    try {
+      const pkg = JSON.parse(raw) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      if (
+        pkg.dependencies?.["@convex-dev/auth"] !== undefined ||
+        pkg.devDependencies?.["@convex-dev/auth"] !== undefined
+      ) {
+        return true;
+      }
+    } catch {
+      // Unparseable manifest: skip
+    }
+  }
+  return false;
+}
+
+// Auth provider detection with a file-signal fallback for monorepos where
+// the root package.json does not list the auth dependency:
+// 1. Dependency signal from any fetched package.json (root + workspaces
+//    that contain a convex/ directory)
+// 2. convex/auth.config.ts|js naming an external provider domain (clerk.
+//    or workos hosts) proves that provider
+// 3. convex/auth.ts plus @convex-dev/auth in any fetched manifest proves
+//    Convex Auth (beta and v2 alpha share the package)
+export function detectAuthProvider(
+  manifestRaws: Array<string | null>,
+  filePaths: Array<string>,
+  fileContentsByPath: Map<string, string>,
+): string | undefined {
+  let depsResult: string | undefined;
+  for (const raw of manifestRaws) {
+    const fromDeps = detectAuthProviderFromDeps(raw);
+    if (fromDeps !== undefined && depsResult === undefined) {
+      depsResult = fromDeps;
+    }
+    if (fromDeps !== undefined && fromDeps !== "none") return fromDeps;
+  }
+
+  // File signal: auth.config naming an external provider domain
+  const authConfigPath = filePaths.find((p) =>
+    /(^|\/)convex\/auth\.config\.(ts|js)$/.test(p),
+  );
+  if (authConfigPath) {
+    const content = fileContentsByPath.get(authConfigPath);
+    if (content) {
+      const lower = stripComments(content).toLowerCase();
+      if (lower.includes("clerk.")) return "Clerk";
+      if (lower.includes("workos")) return "WorkOS";
+    }
+  }
+
+  // File signal: convex/auth.ts plus the @convex-dev/auth dependency
+  const hasAuthTs = filePaths.some((p) => /(^|\/)convex\/auth\.ts$/.test(p));
+  if (hasAuthTs && manifestsHaveConvexAuthDep(manifestRaws)) {
+    return "Convex Auth";
+  }
+
+  return depsResult;
+}
+
+// Detect AI model evidence in fetched convex/ source: convexGateway( calls
+// (Convex AI Gateway) with their "provider/model" string literal argument,
+// plus model id literals passed to OpenAI/Anthropic SDK clients so apps
+// that skip the gateway still produce evidence. Recorded-only facts.
+export function detectAiModelEvidence(fileContentsByPath: Map<string, string>): {
+  usesAiGateway: boolean;
+  aiModelIdsDetected: Array<string>;
+} {
+  const modelIds = new Set<string>();
+  let usesAiGateway = false;
+
+  // Known OpenAI/Anthropic id families, or the gateway's provider/model shape
+  const looksLikeModelId = (id: string): boolean =>
+    /^(gpt-|o[1-9]|chatgpt-|claude-|text-embedding-)/i.test(id) ||
+    /^[a-z0-9-]+\/[A-Za-z0-9][\w.:-]+$/.test(id);
+
+  for (const [path, raw] of fileContentsByPath) {
+    if (!/(^|\/)convex\//.test(path) || path.includes("_generated")) continue;
+    const stripped = stripComments(raw);
+
+    if (/\bconvexGateway\s*\(/.test(stripped)) {
+      usesAiGateway = true;
+    }
+    const gatewayRegex = /\bconvexGateway\(\s*["'`]([^"'`]+)["'`]/g;
+    let match;
+    while ((match = gatewayRegex.exec(stripped))) {
+      modelIds.add(match[1]);
+    }
+
+    // model: "..." literals (OpenAI/Anthropic SDK request options)
+    const sdkModelRegex = /\bmodel\s*:\s*["'`]([A-Za-z0-9][\w./:-]*)["'`]/g;
+    while ((match = sdkModelRegex.exec(stripped))) {
+      if (looksLikeModelId(match[1])) {
+        modelIds.add(match[1]);
+      }
+    }
+  }
+
+  return { usesAiGateway, aiModelIdsDetected: [...modelIds].sort() };
 }
 
 // Strip // line comments and /* */ block comments without touching string
@@ -472,6 +588,8 @@ async function fetchGithubContext(
     filePaths: [],
     logFiles: [],
     skillPaths: [],
+    usesAiGateway: false,
+    aiModelIdsDetected: [],
   };
   if (!githubUrl) return empty;
   const parsed = parseGithubUrl(githubUrl);
@@ -545,6 +663,19 @@ async function fetchGithubContext(
   const packageJsonPath = filePaths.find((p) => p === "package.json");
   const readmePath = filePaths.find((p) => /^README\.md$/i.test(p));
 
+  // Monorepo manifests: package.json files in directories that contain a
+  // convex/ folder (auth/component deps often live in a workspace, not root)
+  const convexDirPrefixes = new Set(
+    filePaths
+      .filter((p) => /(^|\/)convex\//.test(p) && !p.includes("_generated"))
+      .map((p) => p.slice(0, p.lastIndexOf("convex/"))),
+  );
+  const filePathSet = new Set(filePaths);
+  const workspaceManifestPaths = [...convexDirPrefixes]
+    .map((prefix) => `${prefix}package.json`)
+    .filter((p) => p !== "package.json" && filePathSet.has(p))
+    .slice(0, 5);
+
   // Hackathon/tracking markdown at the repo root: self-reported build context
   // the judge can cross-check against commit history and code facts.
   const logFilePaths = filePaths.filter((p) =>
@@ -558,6 +689,7 @@ async function fetchGithubContext(
 
   const filesToFetch: Array<string> = [];
   if (packageJsonPath) filesToFetch.push(packageJsonPath);
+  filesToFetch.push(...workspaceManifestPaths);
   if (readmePath) filesToFetch.push(readmePath);
   filesToFetch.push(...logFilePaths);
   filesToFetch.push(...factFiles);
@@ -605,6 +737,13 @@ async function fetchGithubContext(
     componentsInstalled,
   );
   const repoFacts = extractConvexFacts(filePaths, fileContentsByPath);
+
+  // All fetched manifests: root package.json plus workspace manifests
+  const manifestRaws: Array<string | null> = [
+    packageJsonRaw,
+    ...workspaceManifestPaths.map((p) => fileContentsByPath.get(p) ?? null),
+  ];
+  const aiModelEvidence = detectAiModelEvidence(fileContentsByPath);
 
   // Build the prompt summary from the narrower prompt subset with char budgets
   let totalChars = 0;
@@ -665,7 +804,13 @@ async function fetchGithubContext(
     repoFacts,
     filePaths,
     logFiles,
-    authProviderFromDeps: detectAuthProviderFromDeps(packageJsonRaw),
+    authProviderFromDeps: detectAuthProvider(
+      manifestRaws,
+      filePaths,
+      fileContentsByPath,
+    ),
+    usesAiGateway: aiModelEvidence.usesAiGateway,
+    aiModelIdsDetected: aiModelEvidence.aiModelIdsDetected,
     skillPaths,
     repoMeta,
   };
@@ -1129,7 +1274,7 @@ function mapHeaderFrontendToPlatform(value: string): string | undefined {
   return undefined;
 }
 
-// Cross-check hackathon.md header claims against detected facts. All three
+// Cross-check hackathon.md header claims against detected facts. All four
 // checks are recorded only: they never change a score or a frontend weight.
 function computeLogDiscrepancies(
   header: HackathonLogHeader,
@@ -1169,15 +1314,53 @@ function computeLogDiscrepancies(
     }
   }
 
-  // c. Auth claim vs package.json dependencies (case-insensitive; claims
-  //    outside the known map compare as written so future providers degrade
-  //    to a readable string instead of a false mismatch)
+  // c. Auth claim vs detected provider (deps + file signals). Tolerant
+  //    substring comparison after normalization so variants like
+  //    "Convex Auth v2 alpha" vs "Convex Auth" never flag; claims outside
+  //    the known map degrade to a readable string instead of a false mismatch
   if (header.auth && repo.authProviderFromDeps !== undefined) {
-    const claimed = header.auth.trim().toLowerCase();
-    const detected = repo.authProviderFromDeps.toLowerCase();
-    if (claimed !== detected) {
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const claimed = normalize(header.auth);
+    const detected = normalize(repo.authProviderFromDeps);
+    if (
+      claimed.length > 0 &&
+      detected.length > 0 &&
+      !claimed.includes(detected) &&
+      !detected.includes(claimed)
+    ) {
       discrepancies.push(
         `log says ${header.auth}, repo dependencies say ${repo.authProviderFromDeps}`,
+      );
+    }
+  }
+
+  // d. AI model claims vs model ids detected in convex/ source
+  //    (convexGateway literals + SDK model literals). Only runs when the
+  //    scan found ids, so a claim can never flag on an empty scan.
+  if (
+    header.aiModels &&
+    header.aiModels.length > 0 &&
+    repo.fetched &&
+    repo.aiModelIdsDetected.length > 0
+  ) {
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Compare against full ids and the model part after "provider/"
+    const detectedForms = new Set<string>();
+    for (const id of repo.aiModelIdsDetected) {
+      detectedForms.add(normalize(id));
+      const modelPart = id.split("/").pop();
+      if (modelPart) detectedForms.add(normalize(modelPart));
+    }
+    const missing = header.aiModels.filter((claim) => {
+      const normalized = normalize(claim);
+      if (normalized.length === 0) return false;
+      return ![...detectedForms].some(
+        (d) => d.includes(normalized) || normalized.includes(d),
+      );
+    });
+    if (missing.length > 0) {
+      discrepancies.push(
+        `log lists AI models not found in the repo scan: ${missing.join(", ")}`,
       );
     }
   }
@@ -1427,6 +1610,21 @@ function buildUserMessage(
         : "none"
     }`,
   );
+
+  // AI model evidence detected from convex/ source (convexGateway calls and
+  // SDK model literals). Code facts, same standing as usesAuth and the
+  // component list; the model must not contradict them.
+  if (repo.fetched) {
+    sections.push(
+      `\n=== AI MODEL EVIDENCE (detected from convex/ source; authoritative) ===\nConvex AI Gateway (convexGateway) used: ${
+        repo.usesAiGateway ? "yes" : "no"
+      }\nModel ids referenced in code: ${
+        repo.aiModelIdsDetected.length > 0
+          ? repo.aiModelIdsDetected.join(", ")
+          : "none"
+      }`,
+    );
+  }
 
   if (gitFacts) {
     sections.push(
