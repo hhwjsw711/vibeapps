@@ -1,5 +1,6 @@
 import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
+import { callLlm, type LlmResult } from "./lib/llm";
 import { internal } from "./_generated/api";
 import {
   DEFAULT_AI_JUDGE_PROMPT_BODY,
@@ -1856,138 +1857,16 @@ function buildUserMessage(
   return sections.join("\n");
 }
 
-type LlmResult = {
-  text: string;
-  provider: string;
-  model: string;
-};
-
-// Call Anthropic Messages API
-async function callAnthropic(
+// Judge prompts ask for JSON and the parsers below strip code fences, so
+// the response needs no provider side JSON mode.
+async function callJudgeLlm(
   systemPrompt: string,
   userMessage: string,
 ): Promise<LlmResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-  const model = "claude-sonnet-4-5";
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4000,
-      temperature: 0.2,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
+  return await callLlm(systemPrompt, userMessage, {
+    maxOutputTokens: 4000,
+    temperature: 0.2,
   });
-  if (!res.ok) {
-    throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
-  }
-  const json = (await res.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
-  const text = (json.content || [])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text || "")
-    .join("");
-  if (!text) throw new Error("Anthropic returned empty response");
-  return { text, provider: "anthropic", model };
-}
-
-// Call an OpenAI-compatible chat completions endpoint
-async function callOpenAiCompatible(
-  endpoint: string,
-  apiKey: string,
-  model: string,
-  provider: string,
-  systemPrompt: string,
-  userMessage: string,
-): Promise<LlmResult> {
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      max_tokens: 4000,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`${provider} API error ${res.status}: ${await res.text()}`);
-  }
-  const json = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${provider} returned empty response`);
-  return { text, provider, model };
-}
-
-// Try providers in order: Anthropic, then OpenAI, then OpenRouter
-async function callLlmWithFallback(
-  systemPrompt: string,
-  userMessage: string,
-): Promise<LlmResult> {
-  const errors: Array<string> = [];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      return await callAnthropic(systemPrompt, userMessage);
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "Anthropic failed");
-    }
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      return await callOpenAiCompatible(
-        "https://api.openai.com/v1/chat/completions",
-        process.env.OPENAI_API_KEY,
-        "gpt-4o",
-        "openai",
-        systemPrompt,
-        userMessage,
-      );
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "OpenAI failed");
-    }
-  }
-
-  if (process.env.OPENROUTER_API_KEY) {
-    try {
-      return await callOpenAiCompatible(
-        "https://openrouter.ai/api/v1/chat/completions",
-        process.env.OPENROUTER_API_KEY,
-        "anthropic/claude-sonnet-4.5",
-        "openrouter",
-        systemPrompt,
-        userMessage,
-      );
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "OpenRouter failed");
-    }
-  }
-
-  if (errors.length === 0) {
-    throw new Error(
-      "No AI provider configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY in Convex environment variables.",
-    );
-  }
-  throw new Error(`All configured AI providers failed: ${errors.join(" | ")}`);
 }
 
 function parseGroupSummaryResponse(text: string): string {
@@ -2077,7 +1956,7 @@ ${omittedCount > 0 ? `Evidence omitted because of the context limit: ${omittedCo
 
 Saved review evidence, one JSON object per submission:
 ${evidenceRows.join("\n")}`;
-    const llm = await callLlmWithFallback(systemPrompt, userMessage);
+    const llm = await callJudgeLlm(systemPrompt, userMessage);
     const markdown = parseGroupSummaryResponse(llm.text);
     const generatedAt = Date.now();
 
@@ -2286,13 +2165,13 @@ export const analyzeSubmission = internalAction({
         liveHackathonMd,
       );
 
-      // One retry on parse failure: re-ask the same provider chain
+      // One retry on parse failure: re-ask the same model
       let parsed: ParsedAnalysis | null = null;
       let llm: LlmResult | null = null;
       let lastError: Error | null = null;
       for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
         try {
-          llm = await callLlmWithFallback(systemPrompt, userMessage);
+          llm = await callJudgeLlm(systemPrompt, userMessage);
           parsed = parseAnalysisResponse(llm.text, rubric);
         } catch (error) {
           lastError =
