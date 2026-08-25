@@ -4,6 +4,8 @@ Brief description of the feature and its purpose.
 
 ## Recently Completed
 
+- 2026-08-25 20:20 UTC - Merged PR #16: AI judge and spam check now call one shared `convex/lib/llm.ts` that routes through the hosted Convex AI gateway (deployment service token, no provider API keys). Removed the duplicated Anthropic/OpenAI/OpenRouter fallback chains from both actions. Spam check keeps its heuristic verdict when the gateway call fails. Deps: convex ^1.45.0, ai ^7.0.70, @convex-dev/ai-sdk-provider ^0.1.0. Verified: convex tsc clean, vite build passes, functions deployed to dev. Files: convex/lib/llm.ts, convex/aiJudgeAnalysis.ts, convex/spamCheckAnalysis.ts, package.json.
+
 - 2026-08-25 19:30 UTC - Fixed blank page on empty tag routes like `/tag/allgashackathon` in production. The `TagPage.tsx` empty state rendered `Link` without importing it from react-router-dom, throwing `ReferenceError: Link is not defined` whenever a tag had zero approved submissions. Added the missing import; verified with tsc (no TagPage errors) and lints. Files: src/pages/TagPage.tsx.
 
 - 2026-08-25 19:10 UTC - Fixed the "Could Not Start AI Review ... Server Error" dialog on prod. Prod logs showed `startReview` throwing "AI judge is not enabled for this group" (the group's toggle was off), which Convex redacts to "Server Error" for plain Errors. User-facing guards in `startReview` and `retrySubmission` now throw `ConvexError` so the real message reaches the client, `getGroupAiResults` returns `aiJudgeEnabled`, and the admin AI results header disables the run button with a hint when the toggle is off. Verified with convex tsc (clean) and lints. Files: convex/aiJudge.ts, src/components/admin/AIJudgeResults.tsx.

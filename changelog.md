@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- AI judge and spam check now route through the hosted Convex AI gateway via one shared `convex/lib/llm.ts` (PR #16). The duplicated Anthropic → OpenAI → OpenRouter fallback chains are gone; the gateway authenticates with the deployment's own service token so no provider API keys are needed. Result rows keep the same provider vocabulary because the provider is read from the gateway model id prefix. The spam check still falls back to its deterministic heuristic, now when the gateway call fails instead of when no key is set. Deps: convex ^1.45.0, ai ^7.0.70, @convex-dev/ai-sdk-provider ^0.1.0 (2026-08-25).
 - Judging group submission recipients are selected by a per-person key instead of a story id, so two people on the same submission can be picked separately. Recipient counts read "team members" or "recipients" when teams are included (2026-08-24).
 - Own-profile Inbox button is now the same height as the Edit my profile and Manage Account & Email buttons next to it (2026-08-24).
 - Profile account section is now titled Manage Profile, Account & Email Preferences (2026-08-24).
