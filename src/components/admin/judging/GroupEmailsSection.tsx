@@ -16,11 +16,16 @@ import { GroupDetails, SectionCard } from "./groupSection";
 
 type RecipientAudience = "judges" | "submission_owners";
 
+// Whether the hackathon team members listed on a submission are addressed
+// alongside (or instead of) the person who submitted it.
+type TeamMode = "owners" | "owners_and_team" | "team_only";
+
 type PickerRecipient = {
   id: string;
   name: string;
   email: string;
   detail?: string;
+  isTeamMember?: boolean;
 };
 
 // Emails section of the judging group workspace: pick audience (judges or
@@ -31,6 +36,7 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
   // every render (queries must stay deterministic, no Date.now() server side)
   const [loadedAt] = useState(() => Date.now());
   const [audience, setAudience] = useState<RecipientAudience>("judges");
+  const [teamMode, setTeamMode] = useState<TeamMode>("owners");
 
   const status = useQuery(api.emails.judgingGroupEmails.getGroupEmailStatus, {
     groupId: group._id,
@@ -84,8 +90,31 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
   } | null>(null);
 
   const isJudges = audience === "judges";
-  const audienceNoun = isJudges ? "judge" : "submission owner";
-  const audienceNounPlural = isJudges ? "judges" : "submission owners";
+  // Card copy tracks the audience; recipient counts track the finer team mode
+  // so "12 team members" never reads as "12 submission owners".
+  const audienceTitlePlural = isJudges ? "judges" : "submission owners";
+  const audienceNoun = isJudges
+    ? "judge"
+    : teamMode === "owners"
+      ? "submission owner"
+      : teamMode === "team_only"
+        ? "team member"
+        : "recipient";
+  const audienceNounPlural = `${audienceNoun}s`;
+
+  // Owners and team members arrive in one list, keyed per person, and the
+  // dropdown filters it. No refetch when the mode changes.
+  const submissionRecipients: Array<PickerRecipient> | undefined =
+    ownerRecipients?.map((r) => ({
+      id: r.key,
+      name: r.name,
+      email: r.email,
+      detail: r.teamName ? `${r.storyTitle} · ${r.teamName}` : r.storyTitle,
+      isTeamMember: r.isTeamMember,
+    }));
+  const teamMemberCount =
+    submissionRecipients?.filter((r) => r.isTeamMember).length ?? 0;
+  const hasTeamMembers = teamMemberCount > 0;
 
   const recipients: Array<PickerRecipient> | undefined = isJudges
     ? judgeRecipients?.map((r) => ({
@@ -93,12 +122,13 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
         name: r.name,
         email: r.email,
       }))
-    : ownerRecipients?.map((r) => ({
-        id: r.storyId as string,
-        name: r.name,
-        email: r.email,
-        detail: r.storyTitle,
-      }));
+    : submissionRecipients?.filter((r) =>
+        teamMode === "owners"
+          ? !r.isTeamMember
+          : teamMode === "team_only"
+            ? r.isTeamMember
+            : true,
+      );
 
   const selectedRecipients = (recipients ?? []).filter(
     (r) => !excluded.has(r.id),
@@ -135,7 +165,16 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
 
   const changeAudience = (next: RecipientAudience) => {
     setAudience(next);
+    setTeamMode("owners");
     setExcluded(new Set());
+    setPreviewRecipientId("");
+    setFeedback(null);
+  };
+
+  // Exclusions are keyed per person, so they survive a mode change; only the
+  // preview target can point at someone who just left the list.
+  const changeTeamMode = (next: TeamMode) => {
+    setTeamMode(next);
     setPreviewRecipientId("");
     setFeedback(null);
   };
@@ -205,8 +244,8 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
         judgeIds: isJudges
           ? selectedRecipients.map((r) => r.id as Id<"judges">)
           : undefined,
-        storyIds: !isJudges
-          ? selectedRecipients.map((r) => r.id as Id<"stories">)
+        recipientKeys: !isJudges
+          ? selectedRecipients.map((r) => r.id)
           : undefined,
         templateId: (templateId || undefined) as
           | Id<"emailTemplates">
@@ -281,7 +320,9 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
 
   const emptyRecipientsCopy = isJudges
     ? "No judges in this group registered with an email address, so there is nobody to send to yet."
-    : "No submission owners in this group have an email address, so there is nobody to send to yet.";
+    : teamMode === "team_only"
+      ? "No submission in this group listed a team member with an email address, so there is nobody to send to yet."
+      : "No submission owners in this group have an email address, so there is nobody to send to yet.";
 
   return (
     <div className="space-y-4">
@@ -297,8 +338,8 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
       )}
 
       <SectionCard
-        title={`Email ${audienceNounPlural}`}
-        description={`Send an email to this group's ${audienceNounPlural}. Start from a template or write from scratch. Bodies support basic markdown and per-recipient variables.`}
+        title={`Email ${audienceTitlePlural}`}
+        description={`Send an email to this group's ${audienceTitlePlural}. Start from a template or write from scratch. Bodies support basic markdown and per-recipient variables.`}
       >
         {/* Audience: judges or submission owners */}
         <div>
@@ -325,6 +366,40 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
               : "Owners of submissions in this group. Account email is used when available; duplicates are sent once."}
           </p>
         </div>
+
+        {/* Hackathon team members listed on the submissions */}
+        {!isJudges && (
+          <div>
+            <label
+              htmlFor="group-email-team-mode"
+              className="block text-[13px] font-medium text-copy mb-1"
+            >
+              Team members
+            </label>
+            <SimpleSelect
+              id="group-email-team-mode"
+              value={teamMode}
+              onChange={(value) => changeTeamMode(value as TeamMode)}
+              disabled={isSending || !hasTeamMembers}
+              className="w-full max-w-md h-auto py-2 text-sm"
+              options={[
+                { value: "owners", label: "Submission owners only" },
+                {
+                  value: "owners_and_team",
+                  label: "Submission owners and team members",
+                },
+                { value: "team_only", label: "Team members only" },
+              ]}
+            />
+            <p className="text-xs text-soft mt-1">
+              {submissionRecipients === undefined
+                ? "Checking submissions for team members..."
+                : hasTeamMembers
+                  ? `${teamMemberCount} team member${teamMemberCount === 1 ? "" : "s"} with an email ${teamMemberCount === 1 ? "was" : "were"} listed in the Hackathon Team Info section of these submissions. Addresses already used by an owner are only emailed once.`
+                  : "No submission in this group listed a team member with an email address."}
+            </p>
+          </div>
+        )}
 
         {/* Template picker */}
         <div>
@@ -497,6 +572,11 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
                   <span className="text-[13px] text-ink shrink-0">
                     {recipient.name}
                   </span>
+                  {recipient.isTeamMember && (
+                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-faint border border-hairline rounded px-1.5 py-0.5">
+                      Team
+                    </span>
+                  )}
                   <span className="text-xs text-soft truncate">
                     {recipient.email}
                     {recipient.detail ? ` · ${recipient.detail}` : ""}
@@ -605,7 +685,9 @@ export function GroupEmailsSection({ group }: { group: GroupDetails }) {
                   className="w-auto h-auto px-2 py-1 text-xs gap-1"
                   options={selectedRecipients.map((recipient) => ({
                     value: recipient.id,
-                    label: recipient.name,
+                    label: recipient.isTeamMember
+                      ? `${recipient.name} (team)`
+                      : recipient.name,
                   }))}
                 />
               ) : (

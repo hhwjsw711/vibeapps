@@ -87,32 +87,34 @@ async function collectGroupJudgeRecipients(
   return recipients;
 }
 
-// Submission owners in the group with an email (account email preferred),
-// deduplicated by lowercased address. storyId is the first matching story so
-// the picker can select/deselect without inventing addresses.
+// One addressable person behind a submission: the owner, or a hackathon team
+// member the submitter listed on the form. `key` is what the picker selects on,
+// since a submission can now produce more than one recipient.
+type SubmissionRecipient = {
+  key: string;
+  storyId: Id<"stories">;
+  name: string;
+  email: string;
+  storyTitle: string;
+  isTeamMember: boolean;
+  teamName?: string;
+};
+
+// Submission owners in the group with an email (account email preferred), plus
+// the team members captured in the Hackathon Team Info section. Deduplicated by
+// lowercased address across the whole group; the owner is emitted before their
+// own team so an owner listed on their team is only emailed once.
 async function collectGroupSubmissionOwnerRecipients(
   ctx: QueryCtx | MutationCtx,
   groupId: Id<"judgingGroups">,
-): Promise<
-  Array<{
-    storyId: Id<"stories">;
-    name: string;
-    email: string;
-    storyTitle: string;
-  }>
-> {
+): Promise<Array<SubmissionRecipient>> {
   const submissions = await ctx.db
     .query("judgingGroupSubmissions")
     .withIndex("by_groupId", (q) => q.eq("groupId", groupId))
     .collect();
 
   const seen = new Set<string>();
-  const recipients: Array<{
-    storyId: Id<"stories">;
-    name: string;
-    email: string;
-    storyTitle: string;
-  }> = [];
+  const recipients: Array<SubmissionRecipient> = [];
 
   for (const submission of submissions) {
     const story = await ctx.db.get(submission.storyId);
@@ -129,17 +131,42 @@ async function collectGroupSubmissionOwnerRecipients(
         name = author.name || author.username || name;
       }
     }
-    if (!email) continue;
 
-    const key = email.trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    recipients.push({
-      storyId: story._id,
-      name,
-      email: email.trim(),
-      storyTitle: story.title,
-    });
+    const ownerEmail = email?.trim();
+    if (ownerEmail) {
+      const dedupeKey = ownerEmail.toLowerCase();
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        recipients.push({
+          key: `owner:${story._id}`,
+          storyId: story._id,
+          name,
+          email: ownerEmail,
+          storyTitle: story.title,
+          isTeamMember: false,
+          teamName: story.teamName,
+        });
+      }
+    }
+
+    // Team members are free text on the submit form, so drop blanks and
+    // anything that is not a plausible address before it reaches Resend.
+    for (const member of story.teamMembers ?? []) {
+      const memberEmail = member.email?.trim();
+      if (!memberEmail || !isValidEmailAddress(memberEmail)) continue;
+      const dedupeKey = memberEmail.toLowerCase();
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      recipients.push({
+        key: `team:${story._id}:${dedupeKey}`,
+        storyId: story._id,
+        name: member.name?.trim() || "there",
+        email: memberEmail,
+        storyTitle: story.title,
+        isTeamMember: true,
+        teamName: story.teamName,
+      });
+    }
   }
 
   return recipients;
@@ -238,17 +265,22 @@ export const listGroupRecipients = query({
 });
 
 /**
- * Submission owners in the group with an email, for the recipient picker
+ * Submission owners in the group with an email, plus the hackathon team
+ * members listed on those submissions, for the recipient picker
  * (deduplicated by address; account email preferred over form email).
+ * The client filters by `isTeamMember` for the include-team-members mode.
  */
 export const listGroupSubmissionOwnerRecipients = query({
   args: { groupId: v.id("judgingGroups") },
   returns: v.array(
     v.object({
+      key: v.string(),
       storyId: v.id("stories"),
       name: v.string(),
       email: v.string(),
       storyTitle: v.string(),
+      isTeamMember: v.boolean(),
+      teamName: v.optional(v.string()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -399,10 +431,12 @@ export const sendGroupEmail = mutation({
     body: v.string(),
     signature: v.optional(v.string()),
     replyTo: v.optional(v.string()),
-    // Defaults to judges for older clients; submission_owners uses storyIds.
+    // Defaults to judges for older clients; submission_owners uses
+    // recipientKeys (owner and team member rows), or legacy storyIds.
     recipientType: v.optional(recipientTypeValidator),
     judgeIds: v.optional(v.array(v.id("judges"))),
     storyIds: v.optional(v.array(v.id("stories"))),
+    recipientKeys: v.optional(v.array(v.string())),
     templateId: v.optional(v.id("emailTemplates")),
     // Optional future send time (ms since epoch). Undefined sends now.
     scheduledAtMs: v.optional(v.number()),
@@ -441,21 +475,33 @@ export const sendGroupEmail = mutation({
         throw new Error("None of the selected judges have an email address");
       }
     } else {
+      const recipientKeys = args.recipientKeys ?? [];
       const storyIds = args.storyIds ?? [];
-      if (storyIds.length === 0) {
+      if (recipientKeys.length === 0 && storyIds.length === 0) {
         throw new Error("Select at least one recipient");
       }
       const allRecipients = await collectGroupSubmissionOwnerRecipients(
         ctx,
         args.groupId,
       );
-      const selectedIds = new Set<string>(storyIds);
-      recipients = allRecipients
-        .filter((r) => selectedIds.has(r.storyId))
-        .map((r) => ({ name: r.name, email: r.email }));
+      // Keys address owners and team members individually; storyIds is the
+      // legacy owner-only selection kept for older clients.
+      const selected =
+        recipientKeys.length > 0
+          ? (() => {
+              const keys = new Set<string>(recipientKeys);
+              return allRecipients.filter((r) => keys.has(r.key));
+            })()
+          : (() => {
+              const ids = new Set<string>(storyIds);
+              return allRecipients.filter(
+                (r) => !r.isTeamMember && ids.has(r.storyId),
+              );
+            })();
+      recipients = selected.map((r) => ({ name: r.name, email: r.email }));
       if (recipients.length === 0) {
         throw new Error(
-          "None of the selected submission owners have an email address",
+          "None of the selected submission recipients have an email address",
         );
       }
     }

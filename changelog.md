@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Judging group emails can now reach hackathon teams, not just the person who submitted. A Team members dropdown on the Email submission owners flow picks Submission owners only, Submission owners and team members, or Team members only, pulled from the names and emails entered in Hackathon Team Info on the submit form (2026-08-24).
+- Team recipients show a Team badge with the submission title and team name in the recipient list, can be deselected one at a time, and are previewable like any other recipient. Addresses already used by an owner are only emailed once (2026-08-24).
 - Admin Settings Luma block can set the catalog sidebar heading. Blank uses Upcoming events. The same heading shows on `/events` (2026-08-24).
 - Own-profile header now has a Manage Profile & Account control next to Edit my profile. Same CTA chrome. It jumps to `#manage-profile` (2026-08-23).
 - Signed-out email preference clicks go through sign-in with `?section=email-preferences`, then scroll the Email Preferences card. Signed-in visitors on someone else's profile are sent to their own username (2026-08-23).
@@ -33,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Judging group submission recipients are selected by a per-person key instead of a story id, so two people on the same submission can be picked separately. Recipient counts read "team members" or "recipients" when teams are included (2026-08-24).
 - Own-profile Inbox button is now the same height as the Edit my profile and Manage Account & Email buttons next to it (2026-08-24).
 - Profile account section is now titled Manage Profile, Account & Email Preferences (2026-08-24).
 - Profile activity tabs now carry a small chevron so closed lists look openable. It points down when the list is closed and flips up when it opens (2026-08-24).
