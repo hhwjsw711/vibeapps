@@ -20,6 +20,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
+import { ConvexError } from "convex/values";
 import { api } from "../../../convex/_generated/api";
 import { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "../ui/button";
@@ -33,6 +34,21 @@ import { useDialog } from "../../hooks/useDialog";
 interface AIJudgeResultsProps {
   groupId: Id<"judgingGroups">;
   groupName: string;
+}
+
+// User-facing message from a thrown mutation/action error. ConvexError data
+// survives prod redaction; plain Errors are stripped of their request-id and
+// stack prefixes (and show as "Server Error" on prod deployments).
+function errorMessage(error: unknown): string {
+  if (error instanceof ConvexError && typeof error.data === "string") {
+    return error.data;
+  }
+  if (error instanceof Error) {
+    return error.message
+      .replace(/^\[.*?\]\s*/, "")
+      .replace(/^Uncaught Error:\s*/, "");
+  }
+  return "Please try again.";
 }
 
 type CriteriaScore = {
@@ -892,13 +908,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
         );
       }
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-              .replace(/^\[.*?\]\s*/, "")
-              .replace(/^Uncaught Error:\s*/, "")
-          : "Please try again.";
-      setGroupSummaryError(message);
+      setGroupSummaryError(errorMessage(error));
     } finally {
       setIsGeneratingGroupSummary(false);
     }
@@ -914,15 +924,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
         "success",
       );
     } catch (error) {
-      showMessage(
-        "Could Not Start AI Review",
-        error instanceof Error
-          ? error.message
-              .replace(/^\[.*?\]\s*/, "")
-              .replace(/^Uncaught Error:\s*/, "")
-          : "Please try again.",
-        "error",
-      );
+      showMessage("Could Not Start AI Review", errorMessage(error), "error");
     } finally {
       setIsStarting(false);
     }
@@ -932,11 +934,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
     try {
       await retrySubmission({ resultId });
     } catch (error) {
-      showMessage(
-        "Retry Failed",
-        error instanceof Error ? error.message : "Please try again.",
-        "error",
-      );
+      showMessage("Retry Failed", errorMessage(error), "error");
     }
   };
 
@@ -1012,6 +1010,10 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
     (r) => r.status === "completed",
   );
 
+  // Runs can only start while the group's AI judge toggle is on; default to
+  // true while loading so the button doesn't flash disabled
+  const aiEnabled = data?.aiJudgeEnabled ?? true;
+
   // Rank numbers come from the full ranked list so filtering never renumbers
   const rankById = new Map(
     (data?.results || []).map((r, index) => [r._id, index + 1]),
@@ -1039,25 +1041,33 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
           <Sparkles className="w-4 h-4" />
           AI Judge: Best Use of Convex
         </h2>
-        <Button
-          onClick={handleStartReview}
-          disabled={isStarting || isRunning}
-          className="bg-cta hover:bg-cta-hover"
-        >
-          {isStarting || isRunning ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              {isRunning ? "Review in progress..." : "Starting..."}
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4 mr-2" />
-              {completedResults.length > 0
-                ? "Re-run AI Review"
-                : "Run AI Review"}
-            </>
+        <div className="flex items-center gap-3">
+          {!aiEnabled && (
+            <span className="text-sm text-soft">
+              AI judge is turned off. Enable it in the AI judge section to run
+              a review.
+            </span>
           )}
-        </Button>
+          <Button
+            onClick={handleStartReview}
+            disabled={isStarting || isRunning || !aiEnabled}
+            className="bg-cta hover:bg-cta-hover"
+          >
+            {isStarting || isRunning ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                {isRunning ? "Review in progress..." : "Starting..."}
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4 mr-2" />
+                {completedResults.length > 0
+                  ? "Re-run AI Review"
+                  : "Run AI Review"}
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {data === undefined && <div>Loading AI results...</div>}

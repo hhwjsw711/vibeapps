@@ -5,7 +5,7 @@ import {
   internalMutation,
   QueryCtx,
 } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal, components } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
@@ -493,10 +493,12 @@ export const startReview = mutation({
 
     const group = await ctx.db.get(args.groupId);
     if (!group) {
-      throw new Error("Judging group not found");
+      throw new ConvexError("Judging group not found");
     }
     if (!group.aiJudgeEnabled) {
-      throw new Error("AI judge is not enabled for this group");
+      throw new ConvexError(
+        "The AI judge is turned off for this group. Enable it in the AI judge section, then run the review.",
+      );
     }
 
     // Block concurrent runs: any running row means a review is in progress
@@ -505,7 +507,9 @@ export const startReview = mutation({
       .withIndex("by_groupId", (q) => q.eq("groupId", args.groupId))
       .collect();
     if (existingResults.some((r) => r.status === "running")) {
-      throw new Error("An AI review is already in progress for this group");
+      throw new ConvexError(
+        "An AI review is already in progress for this group",
+      );
     }
 
     const submissions = await ctx.db
@@ -538,7 +542,7 @@ export const startReview = mutation({
     }
 
     if (pendingIds.length === 0) {
-      throw new Error("This judging group has no submissions to review");
+      throw new ConvexError("This judging group has no submissions to review");
     }
 
     // Enqueue every analysis; the workpool runs at most 4 in parallel
@@ -575,11 +579,11 @@ export const retrySubmission = mutation({
   handler: async (ctx, args) => {
     const result = await ctx.db.get(args.resultId);
     if (!result) {
-      throw new Error("AI result not found");
+      throw new ConvexError("AI result not found");
     }
     await requireJudgingGroupPermission(ctx, result.groupId, "judging.ai");
     if (result.status === "running") {
-      throw new Error("This submission is currently being reviewed");
+      throw new ConvexError("This submission is currently being reviewed");
     }
 
     await ctx.db.patch(args.resultId, {
@@ -943,6 +947,7 @@ export const getGroupAiResults = query({
   args: { groupId: v.id("judgingGroups") },
   returns: v.object({
     results: v.array(aiResultValidator),
+    aiJudgeEnabled: v.boolean(),
     counts: v.object({
       pending: v.number(),
       running: v.number(),
@@ -1002,6 +1007,7 @@ export const getGroupAiResults = query({
         : undefined;
     return {
       results,
+      aiJudgeEnabled: group?.aiJudgeEnabled ?? false,
       counts,
       weights: group?.aiRubricWeights,
       groupSummary,
