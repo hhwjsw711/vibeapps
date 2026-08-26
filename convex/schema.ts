@@ -1212,6 +1212,11 @@ export default defineSchema({
     totalRecipients: v.optional(v.number()),
     sentCount: v.optional(v.number()),
     cancelledAt: v.optional(v.number()),
+    // Scheduled sends: when to deliver, the scheduler job (for cancel), and a
+    // human-readable recipient summary for the admin dashboard list
+    scheduledAt: v.optional(v.number()),
+    scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
+    recipientSummary: v.optional(v.string()),
   }).index("by_status", ["status"]),
 
   // App/site settings (global flags)
