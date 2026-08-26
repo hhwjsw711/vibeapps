@@ -110,7 +110,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 ### Authentication & User Management
 
 - `convex/clerk.ts`: Clerk authentication integration with Convex
-- `convex/users.ts`: User management functions (queries, mutations, admin functions, mention search, recent vibers discovery, emoji theme preferences)
+- `convex/users.ts`: User management functions (queries, mutations, admin functions, mention search, recent vibers discovery, emoji theme preferences). `getMyUserDocument` returns a validator-safe subset of the current user row so extra schema fields cannot crash signed-in pages.
 - `convex/mentions.ts`: @Mentions system core utilities (extract, resolve, record, quota enforcement)
 - `convex/dm.ts`: Direct messaging system with conversations, messages, @mentions, edit/delete, rate limiting, and admin reporting integration
 - `convex/dmReactions.ts`: Direct message emoji reactions system with predefined emojis and user reaction management

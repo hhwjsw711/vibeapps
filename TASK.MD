@@ -4,6 +4,8 @@ Brief description of the feature and its purpose.
 
 ## Recently Completed
 
+- 2026-08-26 03:32 UTC - Fixed production crash on `users:getMyUserDocument` after profile signup. The query returned the raw user row while the return validator omitted later schema fields (`nameCustomized`, `emojiTheme`, `isBanned`, `isPaused`), so Convex threw a returns validation error and `useQuery` in Layout white-screened the app. Handler now returns only validator-safe fields and uses `.first()` so a Clerk webhook plus `ensureUser` race cannot crash on duplicate `clerkId` rows. Not deployed to prod yet. Files: convex/users.ts.
+
 - 2026-08-25 20:20 UTC - Merged PR #16: AI judge and spam check now call one shared `convex/lib/llm.ts` that routes through the hosted Convex AI gateway (deployment service token, no provider API keys). Removed the duplicated Anthropic/OpenAI/OpenRouter fallback chains from both actions. Spam check keeps its heuristic verdict when the gateway call fails. Deps: convex ^1.45.0, ai ^7.0.70, @convex-dev/ai-sdk-provider ^0.1.0. Verified: convex tsc clean, vite build passes, functions deployed to dev. Files: convex/lib/llm.ts, convex/aiJudgeAnalysis.ts, convex/spamCheckAnalysis.ts, package.json.
 
 - 2026-08-25 19:30 UTC - Fixed blank page on empty tag routes like `/tag/allgashackathon` in production. The `TagPage.tsx` empty state rendered `Link` without importing it from react-router-dom, throwing `ReferenceError: Link is not defined` whenever a tag had zero approved submissions. Added the missing import; verified with tsc (no TagPage errors) and lints. Files: src/pages/TagPage.tsx.
