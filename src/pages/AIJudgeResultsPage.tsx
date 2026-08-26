@@ -273,7 +273,7 @@ export default function AIJudgeResultsPage() {
                         {index + 1}
                       </span>
                       <div className="min-w-0">
-                        <p className="font-medium text-ink truncate">
+                        <p className="app-title-sm text-ink truncate">
                           {result.storyTitle}
                         </p>
                         <div className="flex items-center gap-3 mt-0.5 text-xs text-soft">
@@ -422,6 +422,31 @@ export default function AIJudgeResultsPage() {
                             </div>
                           </div>
                         )}
+
+                      {(result.authProvider &&
+                        result.authProvider !== "none") ||
+                      result.usesAiGateway ? (
+                        <div className="flex flex-wrap gap-2">
+                          {result.authProvider &&
+                            result.authProvider !== "none" && (
+                              <span className="px-2.5 py-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full">
+                                {result.authProvider}
+                              </span>
+                            )}
+                          {result.usesAiGateway && (
+                            <span
+                              className="px-2.5 py-1 text-xs bg-green-50 text-green-700 border border-green-200 rounded-full"
+                              title={
+                                result.aiModelIdsDetected?.length
+                                  ? result.aiModelIdsDetected.join(", ")
+                                  : undefined
+                              }
+                            >
+                              AI Gateway
+                            </span>
+                          )}
+                        </div>
+                      ) : null}
 
                       {/* Convex components: used vs installed */}
                       {((result.componentsUsed?.length ?? 0) > 0 ||

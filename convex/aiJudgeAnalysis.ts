@@ -1,5 +1,6 @@
-import { internalAction } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
+import { callLlm, type LlmResult } from "./lib/llm";
 import { internal } from "./_generated/api";
 import {
   DEFAULT_AI_JUDGE_PROMPT_BODY,
@@ -10,6 +11,7 @@ import {
 import { fetchVideoContext, type VideoContext } from "./videoTranscripts";
 import {
   parseHackathonLogHeader,
+  redactSecrets,
   type HackathonLogHeader,
 } from "./hackathonLog";
 
@@ -63,6 +65,12 @@ type RepoContext = {
   // "WorkOS", "Convex Auth", "Better Auth", or "none"). Undefined when the
   // repo or its package.json was not readable.
   authProviderFromDeps?: string;
+  // True when a convexGateway( call appears in fetched convex/ source
+  // (Convex AI Gateway use; https://docs.convex.dev/ai-gateway/overview)
+  usesAiGateway: boolean;
+  // Model ids found in fetched convex/ source: convexGateway("provider/model")
+  // string literals plus model ids passed to OpenAI/Anthropic SDK clients
+  aiModelIdsDetected: Array<string>;
   // Agent skills present in the repo (.agents/skills/*/SKILL.md and similar)
   skillPaths: Array<string>;
   repoMeta?: {
@@ -106,9 +114,52 @@ export type HarnessSignal = {
   confidence: "high" | "medium" | "low";
 };
 
+// Official @convex-dev/* packages are detected by prefix. Community Convex
+// components use other scopes and must be mapped by package name. Catalog:
+// https://www.convex.dev/components/get-convex.md (official, 26 as of 2026-08-22)
+// plus Firecrawl, Exa, Context.dev, Browser Use, and agent-ready.
+const COMMUNITY_COMPONENT_PACKAGES: Record<string, string> = {
+  "@firecrawl/firecrawl-convex": "firecrawl",
+  "@exalabs/convex-exa": "exa",
+  "@context-dot-dev/convex": "context-dot-dev",
+  "browser-use-convex-component": "browser-use",
+  "@waynesutton/agent-ready": "agent-ready",
+};
+
+function canonicalComponentName(spec: string): string | null {
+  if (
+    spec === "@convex-dev/eslint-plugin" ||
+    spec.endsWith("/eslint-plugin")
+  ) {
+    return null;
+  }
+  const mapped = COMMUNITY_COMPONENT_PACKAGES[spec];
+  if (mapped) return mapped;
+  if (spec.startsWith("@convex-dev/")) {
+    return spec.slice("@convex-dev/".length);
+  }
+  return null;
+}
+
+function nameFromConfigImport(source: string): string | null {
+  const fromMap = canonicalComponentName(source);
+  if (fromMap) return fromMap;
+  if (source.startsWith("@convex-dev/")) return null; // eslint-plugin already dropped
+  if (source.startsWith("@")) {
+    const last = source.split("/").filter(Boolean).pop() ?? source;
+    if (last.endsWith("-convex")) return last.slice(0, -"-convex".length);
+    return source;
+  }
+  const parts = source.split("/").filter((p) => p && p !== ".");
+  const name = parts[parts.length - 1];
+  if (!name) return null;
+  return COMMUNITY_COMPONENT_PACKAGES[name] ?? name;
+}
+
 // Extract Convex component names INSTALLED via package.json deps
-// (@convex-dev/*) and convex.config.ts imports of */convex.config.
-// Installation alone earns nothing; see extractComponentsUsed.
+// (@convex-dev/* plus known community packages) and convex.config.ts
+// imports of */convex.config. Installation alone earns nothing; see
+// extractComponentsUsed.
 function extractComponents(
   packageJsonRaw: string | null,
   convexConfigRaw: string | null,
@@ -126,12 +177,8 @@ function extractComponents(
         ...Object.keys(pkg.devDependencies || {}),
       ];
       for (const dep of deps) {
-        if (
-          dep.startsWith("@convex-dev/") &&
-          dep !== "@convex-dev/eslint-plugin"
-        ) {
-          found.add(dep.replace("@convex-dev/", ""));
-        }
+        const name = canonicalComponentName(dep);
+        if (name) found.add(name);
       }
     } catch {
       // Unparseable package.json: fall back to config imports only
@@ -142,17 +189,8 @@ function extractComponents(
     const importRegex = /from\s+["']([^"']+)\/convex\.config(?:\.js)?["']/g;
     let match;
     while ((match = importRegex.exec(convexConfigRaw))) {
-      const source = match[1];
-      if (source.startsWith("@convex-dev/")) {
-        found.add(source.replace("@convex-dev/", ""));
-      } else if (source.startsWith("@")) {
-        found.add(source);
-      } else {
-        // Local component folder: use the last path segment as its name
-        const parts = source.split("/").filter((p) => p && p !== ".");
-        const name = parts[parts.length - 1];
-        if (name) found.add(name);
-      }
+      const name = nameFromConfigImport(match[1]);
+      if (name) found.add(name);
     }
   }
 
@@ -176,7 +214,12 @@ function detectAuthProviderFromDeps(
       ...Object.keys(pkg.devDependencies || {}),
     ];
     if (deps.some((d) => d.startsWith("@clerk/"))) return "Clerk";
-    if (deps.some((d) => d.startsWith("@workos-inc/"))) return "WorkOS";
+    if (
+      deps.some((d) => d.startsWith("@workos-inc/")) ||
+      deps.includes("@convex-dev/workos-authkit")
+    ) {
+      return "WorkOS";
+    }
     if (deps.includes("@convex-dev/auth")) return "Convex Auth";
     if (
       deps.includes("better-auth") ||
@@ -188,6 +231,122 @@ function detectAuthProviderFromDeps(
   } catch {
     return undefined;
   }
+}
+
+// True when any fetched manifest lists @convex-dev/auth (the Convex Auth
+// beta and the v2 alpha share this package name)
+function manifestsHaveConvexAuthDep(
+  manifestRaws: Array<string | null>,
+): boolean {
+  for (const raw of manifestRaws) {
+    if (!raw) continue;
+    try {
+      const pkg = JSON.parse(raw) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      if (
+        pkg.dependencies?.["@convex-dev/auth"] !== undefined ||
+        pkg.devDependencies?.["@convex-dev/auth"] !== undefined
+      ) {
+        return true;
+      }
+    } catch {
+      // Unparseable manifest: skip
+    }
+  }
+  return false;
+}
+
+// Auth provider detection with a file-signal fallback for monorepos where
+// the root package.json does not list the auth dependency:
+// 1. Dependency signal from any fetched package.json (root + workspaces
+//    that contain a convex/ directory)
+// 2. convex/auth.config.ts|js naming an external provider domain (clerk.
+//    or workos hosts) proves that provider
+// 3. convex/auth.ts plus @convex-dev/auth in any fetched manifest proves
+//    Convex Auth (beta and v2 alpha share the package)
+export function detectAuthProvider(
+  manifestRaws: Array<string | null>,
+  filePaths: Array<string>,
+  fileContentsByPath: Map<string, string>,
+): string | undefined {
+  let depsResult: string | undefined;
+  for (const raw of manifestRaws) {
+    const fromDeps = detectAuthProviderFromDeps(raw);
+    if (fromDeps !== undefined && depsResult === undefined) {
+      depsResult = fromDeps;
+    }
+    if (fromDeps !== undefined && fromDeps !== "none") return fromDeps;
+  }
+
+  // File signal: auth.config naming an external provider domain
+  const authConfigPath = filePaths.find((p) =>
+    /(^|\/)convex\/auth\.config\.(ts|js)$/.test(p),
+  );
+  if (authConfigPath) {
+    const content = fileContentsByPath.get(authConfigPath);
+    if (content) {
+      const lower = stripComments(content).toLowerCase();
+      if (lower.includes("clerk.")) return "Clerk";
+      if (lower.includes("workos")) return "WorkOS";
+    }
+  }
+
+  // File signal: convex/auth.ts plus the @convex-dev/auth dependency
+  const hasAuthTs = filePaths.some((p) => /(^|\/)convex\/auth\.ts$/.test(p));
+  if (hasAuthTs && manifestsHaveConvexAuthDep(manifestRaws)) {
+    return "Convex Auth";
+  }
+
+  return depsResult;
+}
+
+// Detect AI model evidence in fetched convex/ source: convexGateway( calls
+// (Convex AI Gateway) with their "provider/model" string literal argument,
+// plus model id literals passed to OpenAI/Anthropic SDK clients so apps
+// that skip the gateway still produce evidence. Recorded-only facts.
+export function detectAiModelEvidence(fileContentsByPath: Map<string, string>): {
+  usesAiGateway: boolean;
+  aiModelIdsDetected: Array<string>;
+} {
+  const modelIds = new Set<string>();
+  let usesAiGateway = false;
+
+  // Known OpenAI/Anthropic id families, or the gateway's provider/model shape
+  const looksLikeModelId = (id: string): boolean =>
+    /^(gpt-|o[1-9]|chatgpt-|claude-|text-embedding-)/i.test(id) ||
+    /^[a-z0-9-]+\/[A-Za-z0-9][\w.:-]+$/.test(id);
+
+  for (const [path, raw] of fileContentsByPath) {
+    if (!/(^|\/)convex\//.test(path) || path.includes("_generated")) continue;
+    const stripped = stripComments(raw);
+
+    if (/\bconvexGateway\s*\(/.test(stripped)) {
+      usesAiGateway = true;
+    }
+    if (
+      /from\s+["']@convex-dev\/ai["']/.test(stripped) ||
+      /https?:\/\/[^\s"'`]*convex[^"'`]*\/v1\/chat\/completions/.test(stripped)
+    ) {
+      usesAiGateway = true;
+    }
+    const gatewayRegex = /\bconvexGateway\(\s*["'`]([^"'`]+)["'`]/g;
+    let match;
+    while ((match = gatewayRegex.exec(stripped))) {
+      modelIds.add(match[1]);
+    }
+
+    // model: "..." literals (OpenAI/Anthropic SDK request options)
+    const sdkModelRegex = /\bmodel\s*:\s*["'`]([A-Za-z0-9][\w./:-]*)["'`]/g;
+    while ((match = sdkModelRegex.exec(stripped))) {
+      if (looksLikeModelId(match[1])) {
+        modelIds.add(match[1]);
+      }
+    }
+  }
+
+  return { usesAiGateway, aiModelIdsDetected: [...modelIds].sort() };
 }
 
 // Strip // line comments and /* */ block comments without touching string
@@ -472,6 +631,8 @@ async function fetchGithubContext(
     filePaths: [],
     logFiles: [],
     skillPaths: [],
+    usesAiGateway: false,
+    aiModelIdsDetected: [],
   };
   if (!githubUrl) return empty;
   const parsed = parseGithubUrl(githubUrl);
@@ -545,6 +706,19 @@ async function fetchGithubContext(
   const packageJsonPath = filePaths.find((p) => p === "package.json");
   const readmePath = filePaths.find((p) => /^README\.md$/i.test(p));
 
+  // Monorepo manifests: package.json files in directories that contain a
+  // convex/ folder (auth/component deps often live in a workspace, not root)
+  const convexDirPrefixes = new Set(
+    filePaths
+      .filter((p) => /(^|\/)convex\//.test(p) && !p.includes("_generated"))
+      .map((p) => p.slice(0, p.lastIndexOf("convex/"))),
+  );
+  const filePathSet = new Set(filePaths);
+  const workspaceManifestPaths = [...convexDirPrefixes]
+    .map((prefix) => `${prefix}package.json`)
+    .filter((p) => p !== "package.json" && filePathSet.has(p))
+    .slice(0, 5);
+
   // Hackathon/tracking markdown at the repo root: self-reported build context
   // the judge can cross-check against commit history and code facts.
   const logFilePaths = filePaths.filter((p) =>
@@ -558,6 +732,7 @@ async function fetchGithubContext(
 
   const filesToFetch: Array<string> = [];
   if (packageJsonPath) filesToFetch.push(packageJsonPath);
+  filesToFetch.push(...workspaceManifestPaths);
   if (readmePath) filesToFetch.push(readmePath);
   filesToFetch.push(...logFilePaths);
   filesToFetch.push(...factFiles);
@@ -589,22 +764,29 @@ async function fetchGithubContext(
   const packageJsonRaw = packageJsonPath
     ? (fileContentsByPath.get(packageJsonPath) ?? null)
     : null;
-  const convexConfigPath = factFiles.find((p) =>
+  const convexConfigPaths = factFiles.filter((p) =>
     /(^|\/)convex\/convex\.config\.ts$/.test(p),
   );
-  const convexConfigRaw = convexConfigPath
-    ? (fileContentsByPath.get(convexConfigPath) ?? null)
-    : null;
 
-  const componentsInstalled = extractComponents(
+  // All fetched manifests: root package.json plus workspace manifests
+  const manifestRaws: Array<string | null> = [
     packageJsonRaw,
-    convexConfigRaw,
-  );
+    ...workspaceManifestPaths.map((p) => fileContentsByPath.get(p) ?? null),
+  ];
+  const componentsInstalled = [
+    ...new Set([
+      ...manifestRaws.flatMap((raw) => extractComponents(raw, null)),
+      ...convexConfigPaths.flatMap((path) =>
+        extractComponents(null, fileContentsByPath.get(path) ?? null),
+      ),
+    ]),
+  ].sort();
   const componentsUsed = extractComponentsUsed(
     fileContentsByPath,
     componentsInstalled,
   );
   const repoFacts = extractConvexFacts(filePaths, fileContentsByPath);
+  const aiModelEvidence = detectAiModelEvidence(fileContentsByPath);
 
   // Build the prompt summary from the narrower prompt subset with char budgets
   let totalChars = 0;
@@ -665,7 +847,13 @@ async function fetchGithubContext(
     repoFacts,
     filePaths,
     logFiles,
-    authProviderFromDeps: detectAuthProviderFromDeps(packageJsonRaw),
+    authProviderFromDeps: detectAuthProvider(
+      manifestRaws,
+      filePaths,
+      fileContentsByPath,
+    ),
+    usesAiGateway: aiModelEvidence.usesAiGateway,
+    aiModelIdsDetected: aiModelEvidence.aiModelIdsDetected,
     skillPaths,
     repoMeta,
   };
@@ -936,6 +1124,7 @@ function detectHarnessSignals(
 function buildFeaturesFromFacts(
   facts: RepoFacts,
   componentsUsed: Array<string>,
+  extras?: { authProvider?: string; usesAiGateway?: boolean },
 ): Array<string> {
   const features: Array<string> = [];
   if (facts.hasSchema && facts.tableCount > 0) {
@@ -952,12 +1141,43 @@ function buildFeaturesFromFacts(
   if (facts.vectorIndexCount > 0 || facts.usesVectorSearch) {
     features.push("vector search");
   }
-  if (facts.usesAuth) features.push("auth");
+  const authProvider = extras?.authProvider;
+  if (facts.usesAuth) {
+    features.push(
+      authProvider && authProvider !== "none"
+        ? `auth (${authProvider})`
+        : "auth",
+    );
+  } else if (authProvider && authProvider !== "none") {
+    features.push(`auth (${authProvider})`);
+  }
   if (facts.usesPagination) features.push("pagination");
+  if (extras?.usesAiGateway) features.push("AI Gateway");
   for (const component of componentsUsed) {
     features.push(`component: ${component}`);
   }
   return features;
+}
+
+// Convex markers visible on a live page when the repo is private or missing.
+// Never treated as repo facts; only used as a fallback feature list.
+export function detectLiveConvexSignals(markdown: string): Array<string> {
+  if (!markdown) return [];
+  const signals: Array<string> = [];
+  if (/\.convex\.cloud|\.convex\.site/i.test(markdown)) {
+    signals.push("convex deployment host");
+  }
+  if (
+    /ConvexProvider|convex\/react|useQuery\s*\(|useMutation\s*\(/i.test(
+      markdown,
+    )
+  ) {
+    signals.push("convex react client");
+  }
+  if (/CONVEX_URL|VITE_CONVEX_URL|NEXT_PUBLIC_CONVEX_URL/i.test(markdown)) {
+    signals.push("convex url env");
+  }
+  return signals;
 }
 
 // Deterministic liveness check of the submission's live app URL (never social
@@ -1129,7 +1349,7 @@ function mapHeaderFrontendToPlatform(value: string): string | undefined {
   return undefined;
 }
 
-// Cross-check hackathon.md header claims against detected facts. All three
+// Cross-check hackathon.md header claims against detected facts. All four
 // checks are recorded only: they never change a score or a frontend weight.
 function computeLogDiscrepancies(
   header: HackathonLogHeader,
@@ -1169,15 +1389,53 @@ function computeLogDiscrepancies(
     }
   }
 
-  // c. Auth claim vs package.json dependencies (case-insensitive; claims
-  //    outside the known map compare as written so future providers degrade
-  //    to a readable string instead of a false mismatch)
+  // c. Auth claim vs detected provider (deps + file signals). Tolerant
+  //    substring comparison after normalization so variants like
+  //    "Convex Auth v2 alpha" vs "Convex Auth" never flag; claims outside
+  //    the known map degrade to a readable string instead of a false mismatch
   if (header.auth && repo.authProviderFromDeps !== undefined) {
-    const claimed = header.auth.trim().toLowerCase();
-    const detected = repo.authProviderFromDeps.toLowerCase();
-    if (claimed !== detected) {
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const claimed = normalize(header.auth);
+    const detected = normalize(repo.authProviderFromDeps);
+    if (
+      claimed.length > 0 &&
+      detected.length > 0 &&
+      !claimed.includes(detected) &&
+      !detected.includes(claimed)
+    ) {
       discrepancies.push(
         `log says ${header.auth}, repo dependencies say ${repo.authProviderFromDeps}`,
+      );
+    }
+  }
+
+  // d. AI model claims vs model ids detected in convex/ source
+  //    (convexGateway literals + SDK model literals). Only runs when the
+  //    scan found ids, so a claim can never flag on an empty scan.
+  if (
+    header.aiModels &&
+    header.aiModels.length > 0 &&
+    repo.fetched &&
+    repo.aiModelIdsDetected.length > 0
+  ) {
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Compare against full ids and the model part after "provider/"
+    const detectedForms = new Set<string>();
+    for (const id of repo.aiModelIdsDetected) {
+      detectedForms.add(normalize(id));
+      const modelPart = id.split("/").pop();
+      if (modelPart) detectedForms.add(normalize(modelPart));
+    }
+    const missing = header.aiModels.filter((claim) => {
+      const normalized = normalize(claim);
+      if (normalized.length === 0) return false;
+      return ![...detectedForms].some(
+        (d) => d.includes(normalized) || normalized.includes(d),
+      );
+    });
+    if (missing.length > 0) {
+      discrepancies.push(
+        `log lists AI models not found in the repo scan: ${missing.join(", ")}`,
       );
     }
   }
@@ -1274,6 +1532,54 @@ async function fetchHackathonManifest(
         pretty.length > MAX_MANIFEST_CHARS
           ? pretty.slice(0, MAX_MANIFEST_CHARS) + "\n... (truncated)"
           : pretty,
+    };
+  } catch {
+    return { fetched: false, content: "" };
+  }
+}
+
+// Fetch published /hackathon.md from the live app origin. Third fallback
+// after the repo file and a pasted log. HTML responses (SPA catch-all) are
+// rejected so index.html is never treated as a log.
+async function fetchLiveHackathonMd(
+  url: string | undefined,
+): Promise<ManifestContext> {
+  if (!url) return { fetched: false, content: "" };
+  let origin: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { fetched: false, content: "" };
+    }
+    origin = parsed.origin;
+  } catch {
+    return { fetched: false, content: "" };
+  }
+
+  const mdUrl = `${origin}/hackathon.md`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(mdUrl, {
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return { fetched: false, content: "" };
+    const text = await res.text();
+    const trimmed = text.trim();
+    if (!trimmed) return { fetched: false, content: "" };
+    if (/^<!doctype html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
+      return { fetched: false, content: "" };
+    }
+    const redacted = redactSecrets(trimmed);
+    return {
+      fetched: true,
+      url: mdUrl,
+      content:
+        redacted.length > MAX_LOG_FILE_CHARS
+          ? redacted.slice(0, MAX_LOG_FILE_CHARS) + "\n... (truncated)"
+          : redacted,
     };
   } catch {
     return { fetched: false, content: "" };
@@ -1380,6 +1686,7 @@ function buildUserMessage(
   manifest: ManifestContext,
   video: VideoContext,
   frontendHosting: FrontendHosting | undefined,
+  liveHackathonMd?: ManifestContext,
 ): string {
   const sections: Array<string> = [
     `SUBMISSION: ${data.title}`,
@@ -1428,6 +1735,27 @@ function buildUserMessage(
     }`,
   );
 
+  if (repo.fetched && repo.authProviderFromDeps) {
+    sections.push(
+      `\n=== AUTH PROVIDER (detected from package.json / auth config; authoritative) ===\nProvider: ${repo.authProviderFromDeps}\nConvex Auth covers the published library and the v2 alpha (@convex-dev/auth). ctx.auth usage is listed separately in VERIFIED CONVEX FACTS.`,
+    );
+  }
+
+  // AI model evidence detected from convex/ source (convexGateway calls and
+  // SDK model literals). Code facts, same standing as usesAuth and the
+  // component list; the model must not contradict them.
+  if (repo.fetched) {
+    sections.push(
+      `\n=== AI MODEL EVIDENCE (detected from convex/ source; authoritative) ===\nConvex AI Gateway (convexGateway) used: ${
+        repo.usesAiGateway ? "yes" : "no"
+      }\nModel ids referenced in code: ${
+        repo.aiModelIdsDetected.length > 0
+          ? repo.aiModelIdsDetected.join(", ")
+          : "none"
+      }`,
+    );
+  }
+
   if (gitFacts) {
     sections.push(
       `\n=== GIT HISTORY (from GitHub commits API, committer dates) ===\n${formatGitFacts(gitFacts)}`,
@@ -1457,6 +1785,14 @@ function buildUserMessage(
         `--- FILE: hackathon.md (pasted at submission; self-reported) ---\n${pasted}`,
       );
     }
+  } else if (
+    !repoHasHackathonMd &&
+    liveHackathonMd?.fetched &&
+    liveHackathonMd.content
+  ) {
+    logEntries.push(
+      `--- FILE: hackathon.md (published at ${liveHackathonMd.url ?? "live origin"}; self-reported) ---\n${liveHackathonMd.content}`,
+    );
   }
   if (logEntries.length > 0) {
     sections.push(
@@ -1490,6 +1826,15 @@ function buildUserMessage(
       : "\n=== LIVE SITE CONTENT ===\nNot available.",
   );
 
+  if (!repo.fetched && scrape.fetched) {
+    const liveSignals = detectLiveConvexSignals(scrape.markdown);
+    if (liveSignals.length > 0) {
+      sections.push(
+        `\n=== LIVE SITE CONVEX SIGNALS (no repo; detected from scraped page; not a substitute for code facts) ===\n${liveSignals.join(", ")}`,
+      );
+    }
+  }
+
   // Video demo transcript: unverified builder narrative. Missing transcripts
   // must never lower any score since videos are optional submissions.
   if (video.included) {
@@ -1512,139 +1857,126 @@ function buildUserMessage(
   return sections.join("\n");
 }
 
-type LlmResult = {
-  text: string;
-  provider: string;
-  model: string;
-};
-
-// Call Anthropic Messages API
-async function callAnthropic(
+// Judge prompts ask for JSON and the parsers below strip code fences, so
+// the response needs no provider side JSON mode.
+async function callJudgeLlm(
   systemPrompt: string,
   userMessage: string,
 ): Promise<LlmResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-  const model = "claude-sonnet-4-5";
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4000,
-      temperature: 0.2,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
+  return await callLlm(systemPrompt, userMessage, {
+    maxOutputTokens: 4000,
+    temperature: 0.2,
   });
-  if (!res.ok) {
-    throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
-  }
-  const json = (await res.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
-  const text = (json.content || [])
-    .filter((block) => block.type === "text")
-    .map((block) => block.text || "")
-    .join("");
-  if (!text) throw new Error("Anthropic returned empty response");
-  return { text, provider: "anthropic", model };
 }
 
-// Call an OpenAI-compatible chat completions endpoint
-async function callOpenAiCompatible(
-  endpoint: string,
-  apiKey: string,
-  model: string,
-  provider: string,
-  systemPrompt: string,
-  userMessage: string,
-): Promise<LlmResult> {
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      max_tokens: 4000,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`${provider} API error ${res.status}: ${await res.text()}`);
-  }
-  const json = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${provider} returned empty response`);
-  return { text, provider, model };
-}
-
-// Try providers in order: Anthropic, then OpenAI, then OpenRouter
-async function callLlmWithFallback(
-  systemPrompt: string,
-  userMessage: string,
-): Promise<LlmResult> {
-  const errors: Array<string> = [];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      return await callAnthropic(systemPrompt, userMessage);
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "Anthropic failed");
+function parseGroupSummaryResponse(text: string): string {
+  let cleaned = text.trim();
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) cleaned = fenceMatch[1].trim();
+  if (!cleaned.startsWith("{")) {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start === -1 || end === -1) {
+      throw new Error("Group summary response contained no JSON object");
     }
+    cleaned = cleaned.slice(start, end + 1);
   }
+  const parsed = JSON.parse(cleaned) as { summaryMarkdown?: unknown };
+  if (
+    typeof parsed.summaryMarkdown !== "string" ||
+    parsed.summaryMarkdown.trim().length === 0
+  ) {
+    throw new Error("Group summary response is missing summaryMarkdown");
+  }
+  return parsed.summaryMarkdown.trim().slice(0, 12000);
+}
 
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      return await callOpenAiCompatible(
-        "https://api.openai.com/v1/chat/completions",
-        process.env.OPENAI_API_KEY,
-        "gpt-4o",
-        "openai",
-        systemPrompt,
-        userMessage,
+/**
+ * Generate a privacy-safe cohort summary from saved AI review evidence.
+ * This never rescans repositories and never writes or changes scores.
+ */
+export const generateGroupSummary = action({
+  args: { groupId: v.id("judgingGroups") },
+  returns: v.object({
+    markdown: v.string(),
+    generatedAt: v.number(),
+    provider: v.string(),
+    model: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(internal.aiJudge.getGroupSummaryInput, {
+      groupId: args.groupId,
+    });
+    if (!data) {
+      throw new Error("AI judging is not enabled for this group");
+    }
+    if (data.hasInFlightReviews) {
+      throw new Error(
+        "Wait for pending and running reviews to finish before generating the group summary",
       );
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "OpenAI failed");
     }
-  }
-
-  if (process.env.OPENROUTER_API_KEY) {
-    try {
-      return await callOpenAiCompatible(
-        "https://openrouter.ai/api/v1/chat/completions",
-        process.env.OPENROUTER_API_KEY,
-        "deepseek/deepseek-chat-v3.1",
-        "openrouter",
-        systemPrompt,
-        userMessage,
-      );
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "OpenRouter failed");
+    if (data.submissions.length === 0) {
+      throw new Error("No completed AI reviews are available to summarize");
     }
-  }
 
-  if (errors.length === 0) {
-    throw new Error(
-      "No AI provider configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY in Convex environment variables.",
-    );
-  }
-  throw new Error(`All configured AI providers failed: ${errors.join(" | ")}`);
-}
+    const maxEvidenceCharacters = 150000;
+    const evidenceRows: Array<string> = [];
+    let evidenceCharacters = 0;
+    let omittedCount = 0;
+    for (const submission of data.submissions) {
+      const serialized = JSON.stringify(submission);
+      if (
+        evidenceCharacters + serialized.length + 1 >
+        maxEvidenceCharacters
+      ) {
+        omittedCount += 1;
+        continue;
+      }
+      evidenceRows.push(serialized);
+      evidenceCharacters += serialized.length + 1;
+    }
+
+    const systemPrompt = `You write internal hackathon cohort summaries for the Convex team.
+
+Use only the saved AI review evidence provided by the organizer. Do not rescore, rank, or recommend winners. Do not infer participant identity, intent, or private information. Separate measured facts from AI judge observations. Mention app titles only when a concrete example improves clarity. Keep the summary useful to product, developer relations, and hackathon teams.
+
+Return one JSON object with exactly this shape:
+{"summaryMarkdown":"Markdown content"}
+
+The Markdown must be at most 700 words and use these H2 sections:
+## Executive summary
+## Shared patterns
+## Common gaps
+## Recommendations for the Convex team
+
+Use short paragraphs and concise bullet lists. Do not add an H1 title.`;
+    const userMessage = `Judging group: ${data.groupName}
+Completed reviews represented: ${evidenceRows.length} of ${data.submissions.length}
+${omittedCount > 0 ? `Evidence omitted because of the context limit: ${omittedCount} submissions. State this limitation in the executive summary.` : ""}
+
+Saved review evidence, one JSON object per submission:
+${evidenceRows.join("\n")}`;
+    const llm = await callJudgeLlm(systemPrompt, userMessage);
+    const markdown = parseGroupSummaryResponse(llm.text);
+    const generatedAt = Date.now();
+
+    await ctx.runMutation(internal.aiJudge.saveGroupSummary, {
+      groupId: args.groupId,
+      markdown,
+      generatedAt,
+      fingerprint: data.fingerprint,
+      provider: llm.provider,
+      model: llm.model,
+    });
+
+    return {
+      markdown,
+      generatedAt,
+      provider: llm.provider,
+      model: llm.model,
+    };
+  },
+});
 
 type ParsedAnalysis = {
   criteriaScores: Array<{
@@ -1758,7 +2090,7 @@ export const analyzeSubmission = internalAction({
       const parsedRepoUrl = data.githubUrl
         ? parseGithubUrl(data.githubUrl)
         : null;
-      const [repo, commitHistory, scrape, liveness, manifest, video] =
+      const [repo, commitHistory, scrape, liveness, manifest, video, liveHackathonMd] =
         await Promise.all([
           fetchGithubContext(data.githubUrl),
           fetchCommitHistory(parsedRepoUrl),
@@ -1766,6 +2098,7 @@ export const analyzeSubmission = internalAction({
           checkUrlLiveness(data.url),
           fetchHackathonManifest(data.url),
           fetchVideoContext(ctx, data.storyId, data.videoUrl),
+          fetchLiveHackathonMd(data.url),
         ]);
       const urlCheckRaw = liveness.check;
 
@@ -1793,7 +2126,10 @@ export const analyzeSubmission = internalAction({
       const repoHackathonMd = repo.logFiles.find((f) =>
         /^hackathon\.md$/i.test(f.path),
       );
-      const effectiveLog = repoHackathonMd?.content ?? data.hackathonLog;
+      const effectiveLog =
+        repoHackathonMd?.content ??
+        data.hackathonLog ??
+        (liveHackathonMd.fetched ? liveHackathonMd.content : undefined);
       const logHeader = effectiveLog
         ? parseHackathonLogHeader(effectiveLog)
         : undefined;
@@ -1826,15 +2162,16 @@ export const analyzeSubmission = internalAction({
         manifest,
         video,
         frontendHosting,
+        liveHackathonMd,
       );
 
-      // One retry on parse failure: re-ask the same provider chain
+      // One retry on parse failure: re-ask the same model
       let parsed: ParsedAnalysis | null = null;
       let llm: LlmResult | null = null;
       let lastError: Error | null = null;
       for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
         try {
-          llm = await callLlmWithFallback(systemPrompt, userMessage);
+          llm = await callJudgeLlm(systemPrompt, userMessage);
           parsed = parseAnalysisResponse(llm.text, rubric);
         } catch (error) {
           lastError =
@@ -1920,9 +2257,15 @@ export const analyzeSubmission = internalAction({
       }
 
       // Feature list is now derived from verified facts, not model output
+      const liveConvexSignals = repo.fetched
+        ? []
+        : detectLiveConvexSignals(scrape.markdown);
       const convexFeaturesDetected = repo.repoFacts
-        ? buildFeaturesFromFacts(repo.repoFacts, repo.componentsUsed)
-        : [];
+        ? buildFeaturesFromFacts(repo.repoFacts, repo.componentsUsed, {
+            authProvider: repo.authProviderFromDeps,
+            usesAiGateway: repo.usesAiGateway,
+          })
+        : liveConvexSignals.map((signal) => `live site: ${signal}`);
 
       await ctx.runMutation(internal.aiJudge.saveResult, {
         resultId: args.resultId,
@@ -1949,6 +2292,12 @@ export const analyzeSubmission = internalAction({
           logDiscrepancies:
             logDiscrepancies.length > 0 ? logDiscrepancies : undefined,
           hackathonLogEvent: logHeader?.event,
+          authProvider: repo.authProviderFromDeps,
+          usesAiGateway: repo.fetched ? repo.usesAiGateway : undefined,
+          aiModelIdsDetected:
+            repo.aiModelIdsDetected.length > 0
+              ? repo.aiModelIdsDetected
+              : undefined,
         },
       });
     } catch (error) {

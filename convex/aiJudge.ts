@@ -5,7 +5,7 @@ import {
   internalMutation,
   QueryCtx,
 } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal, components } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
@@ -124,7 +124,8 @@ Rules:
 - If the live URL is dead, 404, or missing, also flag that fact explicitly in overallReasoning. Do NOT lower the other five Convex criteria because of it; the ranking should stay mostly about Convex usage.
 - Convex components: only components listed as USED IN CODE (referenced via components.<name> in source) count toward the "advanced" score. Components that are installed in package.json or convex.config.ts but never referenced in code earn NOTHING; do not raise any score for them. A submission that uses one or more components well should generally score 7 or higher on "advanced", and thoughtful multi-component usage can justify 9-10. Name each used component in your "advanced" reasoning.
 - The GIT HISTORY section (when present) is context about the build timeline. It is informational; do not add or remove points for commit counts or timeline shape on their own.
-- The PROJECT LOG FILES and PUBLISHED HACKATHON MANIFEST sections (when present) are self-reported by the team: hackathon logs, changelogs, task lists, and the published manifest. Use them as context for what was built and when, but the VERIFIED CONVEX FACTS always win over self-reported claims. If the manifest claims components or features the facts do not show, note the gap in your reasoning.
+- The AUTH PROVIDER and AI MODEL EVIDENCE sections (when present) are measured from source the same way VERIFIED CONVEX FACTS are. Never contradict them. Name the detected auth library and Convex AI Gateway use (or its absence) in reasoning when those sections exist. Do not invent an auth provider or gateway use the facts do not show.
+- The PROJECT LOG FILES and PUBLISHED HACKATHON MANIFEST sections (when present) are self-reported by the team: hackathon logs, changelogs, task lists, and the published manifest. Use them as context for what was built and when, but the VERIFIED CONVEX FACTS always win over self-reported claims. If the manifest claims components or features the facts do not show, note the gap in your reasoning. A missing hackathon.md is not a penalty; judge from repo and live-app evidence.
 - Be specific in reasoning: name actual files, functions, tables, or features you observed.`;
 
 // Limits for admin-editable AI settings
@@ -283,8 +284,52 @@ const aiResultValidator = v.object({
   logDiscrepancies: v.optional(v.array(v.string())),
   // Event free text from the repo or pasted hackathon.md header; admin only
   hackathonLogEvent: v.optional(v.string()),
+  authProvider: v.optional(v.string()),
+  usesAiGateway: v.optional(v.boolean()),
+  aiModelIdsDetected: v.optional(v.array(v.string())),
   editedAt: v.optional(v.number()),
 });
+
+const groupSummaryInputValidator = v.object({
+  title: v.string(),
+  averageScore: v.optional(v.number()),
+  overallReasoning: v.optional(v.string()),
+  convexFeaturesDetected: v.optional(v.array(v.string())),
+  componentsUsed: v.optional(v.array(v.string())),
+  repoFacts: v.optional(repoFactsValidator),
+  gitFacts: v.optional(gitFactsValidator),
+  urlCheck: v.optional(urlCheckValidator),
+});
+
+// Stable, compact fingerprint of the evidence that can affect a group summary.
+function getGroupSummaryFingerprint(
+  rows: Array<Doc<"aiJudgeResults">>,
+): string {
+  const payload = JSON.stringify(
+    [...rows]
+      .sort((a, b) => a._id.localeCompare(b._id))
+      .map((row) => ({
+        id: row._id,
+        status: row.status,
+        criteriaScores: row.criteriaScores,
+        averageScore: row.averageScore,
+        overallReasoning: row.overallReasoning,
+        convexFeaturesDetected: row.convexFeaturesDetected,
+        componentsUsed: row.componentsUsed,
+        repoFacts: row.repoFacts,
+        gitFacts: row.gitFacts,
+        urlCheck: row.urlCheck,
+        error: row.error,
+        editedAt: row.editedAt,
+      })),
+  );
+  let hash = 2166136261;
+  for (let index = 0; index < payload.length; index += 1) {
+    hash ^= payload.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `v1:${rows.length}:${(hash >>> 0).toString(36)}`;
+}
 
 // Helper mirroring judgingGroups: exclude deleted/hidden/archived/rejected stories
 function isStoryValidForJudging(
@@ -353,6 +398,9 @@ async function enrichResults(
     frontendHosting?: { platform: string; evidence: string };
     logDiscrepancies?: Array<string>;
     hackathonLogEvent?: string;
+    authProvider?: string;
+    usesAiGateway?: boolean;
+    aiModelIdsDetected?: Array<string>;
     editedAt?: number;
   }> = [];
 
@@ -403,6 +451,9 @@ async function enrichResults(
             ? parseHackathonLogHeader(story.hackathonLog).event
             : undefined))
         : undefined,
+      authProvider: result.authProvider,
+      usesAiGateway: result.usesAiGateway,
+      aiModelIdsDetected: result.aiModelIdsDetected,
       editedAt: result.editedAt,
     });
   }
@@ -442,10 +493,12 @@ export const startReview = mutation({
 
     const group = await ctx.db.get(args.groupId);
     if (!group) {
-      throw new Error("Judging group not found");
+      throw new ConvexError("Judging group not found");
     }
     if (!group.aiJudgeEnabled) {
-      throw new Error("AI judge is not enabled for this group");
+      throw new ConvexError(
+        "The AI judge is turned off for this group. Enable it in the AI judge section, then run the review.",
+      );
     }
 
     // Block concurrent runs: any running row means a review is in progress
@@ -454,7 +507,9 @@ export const startReview = mutation({
       .withIndex("by_groupId", (q) => q.eq("groupId", args.groupId))
       .collect();
     if (existingResults.some((r) => r.status === "running")) {
-      throw new Error("An AI review is already in progress for this group");
+      throw new ConvexError(
+        "An AI review is already in progress for this group",
+      );
     }
 
     const submissions = await ctx.db
@@ -487,7 +542,7 @@ export const startReview = mutation({
     }
 
     if (pendingIds.length === 0) {
-      throw new Error("This judging group has no submissions to review");
+      throw new ConvexError("This judging group has no submissions to review");
     }
 
     // Enqueue every analysis; the workpool runs at most 4 in parallel
@@ -524,11 +579,11 @@ export const retrySubmission = mutation({
   handler: async (ctx, args) => {
     const result = await ctx.db.get(args.resultId);
     if (!result) {
-      throw new Error("AI result not found");
+      throw new ConvexError("AI result not found");
     }
     await requireJudgingGroupPermission(ctx, result.groupId, "judging.ai");
     if (result.status === "running") {
-      throw new Error("This submission is currently being reviewed");
+      throw new ConvexError("This submission is currently being reviewed");
     }
 
     await ctx.db.patch(args.resultId, {
@@ -892,6 +947,7 @@ export const getGroupAiResults = query({
   args: { groupId: v.id("judgingGroups") },
   returns: v.object({
     results: v.array(aiResultValidator),
+    aiJudgeEnabled: v.boolean(),
     counts: v.object({
       pending: v.number(),
       running: v.number(),
@@ -900,6 +956,16 @@ export const getGroupAiResults = query({
     }),
     weights: v.optional(
       v.array(v.object({ key: v.string(), weight: v.number() })),
+    ),
+    groupSummary: v.optional(
+      v.object({
+        markdown: v.string(),
+        generatedAt: v.number(),
+        provider: v.string(),
+        model: v.string(),
+        fingerprint: v.string(),
+        isStale: v.boolean(),
+      }),
     ),
   }),
   handler: async (ctx, args) => {
@@ -922,7 +988,30 @@ export const getGroupAiResults = query({
     for (const r of results) {
       counts[r.status]++;
     }
-    return { results, counts, weights: group?.aiRubricWeights };
+    const currentFingerprint = getGroupSummaryFingerprint(rows);
+    const groupSummary =
+      group?.aiGroupSummary &&
+      group.aiGroupSummaryGeneratedAt !== undefined &&
+      group.aiGroupSummaryProvider &&
+      group.aiGroupSummaryModel &&
+      group.aiGroupSummaryFingerprint
+        ? {
+            markdown: group.aiGroupSummary,
+            generatedAt: group.aiGroupSummaryGeneratedAt,
+            provider: group.aiGroupSummaryProvider,
+            model: group.aiGroupSummaryModel,
+            fingerprint: group.aiGroupSummaryFingerprint,
+            isStale:
+              group.aiGroupSummaryFingerprint !== currentFingerprint,
+          }
+        : undefined;
+    return {
+      results,
+      aiJudgeEnabled: group?.aiJudgeEnabled ?? false,
+      counts,
+      weights: group?.aiRubricWeights,
+      groupSummary,
+    };
   },
 });
 
@@ -974,6 +1063,9 @@ export const getGroupAiReportData = query({
           selfReportedModel: v.optional(v.string()),
           urlCheck: v.optional(urlCheckValidator),
           frontendHosting: v.optional(frontendHostingValidator),
+          authProvider: v.optional(v.string()),
+          usesAiGateway: v.optional(v.boolean()),
+          aiModelIdsDetected: v.optional(v.array(v.string())),
           sourcesUsed: v.optional(
             v.object({
               github: v.boolean(),
@@ -1034,6 +1126,9 @@ export const getGroupAiReportData = query({
         note: string;
       };
       frontendHosting?: { platform: string; evidence: string };
+      authProvider?: string;
+      usesAiGateway?: boolean;
+      aiModelIdsDetected?: Array<string>;
       sourcesUsed?: {
         github: boolean;
         liveUrl: boolean;
@@ -1079,6 +1174,9 @@ export const getGroupAiReportData = query({
         selfReportedModel: story.selfReportedModel,
         urlCheck: row.urlCheck,
         frontendHosting: row.frontendHosting,
+        authProvider: row.authProvider,
+        usesAiGateway: row.usesAiGateway,
+        aiModelIdsDetected: row.aiModelIdsDetected,
         sourcesUsed: row.sourcesUsed,
         error: row.error,
       });
@@ -1101,6 +1199,95 @@ export const getGroupAiReportData = query({
 });
 
 // --- Internal: used by the analysis action chain ---
+
+/**
+ * Privacy-safe saved result evidence for an on-demand group summary.
+ * The caller's identity is forwarded from the public action.
+ */
+export const getGroupSummaryInput = internalQuery({
+  args: { groupId: v.id("judgingGroups") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      groupName: v.string(),
+      fingerprint: v.string(),
+      hasInFlightReviews: v.boolean(),
+      submissions: v.array(groupSummaryInputValidator),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requireJudgingGroupPermission(ctx, args.groupId, "judging.ai");
+
+    const group = await ctx.db.get(args.groupId);
+    if (!group || !group.aiJudgeEnabled) return null;
+
+    const rows = await ctx.db
+      .query("aiJudgeResults")
+      .withIndex("by_groupId", (q) => q.eq("groupId", args.groupId))
+      .collect();
+    const stories = await Promise.all(
+      rows.map(async (row) => await ctx.db.get(row.storyId)),
+    );
+    const submissions: Array<{
+      title: string;
+      averageScore?: number;
+      overallReasoning?: string;
+      convexFeaturesDetected?: Array<string>;
+      componentsUsed?: Array<string>;
+      repoFacts?: Doc<"aiJudgeResults">["repoFacts"];
+      gitFacts?: Doc<"aiJudgeResults">["gitFacts"];
+      urlCheck?: Doc<"aiJudgeResults">["urlCheck"];
+    }> = [];
+
+    for (const [index, row] of rows.entries()) {
+      const story = stories[index];
+      if (row.status !== "completed" || !isStoryValidForJudging(story)) {
+        continue;
+      }
+      submissions.push({
+        title: story.title,
+        averageScore: row.averageScore,
+        overallReasoning: row.overallReasoning,
+        convexFeaturesDetected: row.convexFeaturesDetected,
+        componentsUsed: row.componentsUsed,
+        repoFacts: row.repoFacts,
+        gitFacts: row.gitFacts,
+        urlCheck: row.urlCheck,
+      });
+    }
+
+    return {
+      groupName: group.name,
+      fingerprint: getGroupSummaryFingerprint(rows),
+      hasInFlightReviews: rows.some(
+        (row) => row.status === "pending" || row.status === "running",
+      ),
+      submissions,
+    };
+  },
+});
+
+export const saveGroupSummary = internalMutation({
+  args: {
+    groupId: v.id("judgingGroups"),
+    markdown: v.string(),
+    generatedAt: v.number(),
+    fingerprint: v.string(),
+    provider: v.string(),
+    model: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.groupId, {
+      aiGroupSummary: args.markdown,
+      aiGroupSummaryGeneratedAt: args.generatedAt,
+      aiGroupSummaryFingerprint: args.fingerprint,
+      aiGroupSummaryProvider: args.provider,
+      aiGroupSummaryModel: args.model,
+    });
+    return null;
+  },
+});
 
 /**
  * Mark a result row as running before analysis begins.
@@ -1219,6 +1406,9 @@ export const saveResult = internalMutation({
         logDiscrepancies: v.optional(v.array(v.string())),
         // Event free text from the hackathon.md header (repo copy wins)
         hackathonLogEvent: v.optional(v.string()),
+        authProvider: v.optional(v.string()),
+        usesAiGateway: v.optional(v.boolean()),
+        aiModelIdsDetected: v.optional(v.array(v.string())),
       }),
       v.object({
         kind: v.literal("error"),
@@ -1265,6 +1455,9 @@ export const saveResult = internalMutation({
         frontendHosting: args.outcome.frontendHosting,
         logDiscrepancies: args.outcome.logDiscrepancies,
         hackathonLogEvent: args.outcome.hackathonLogEvent,
+        authProvider: args.outcome.authProvider,
+        usesAiGateway: args.outcome.usesAiGateway,
+        aiModelIdsDetected: args.outcome.aiModelIdsDetected,
         error: undefined,
         editedBy: undefined,
         editedAt: undefined,

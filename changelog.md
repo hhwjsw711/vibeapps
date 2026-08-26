@@ -5,7 +5,152 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Change Log](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- AI Hackathon Report, Convex Recap, and Best Use of Convex stats now persist and roll up detected auth providers (Clerk, WorkOS, Convex Auth including v2, Better Auth) and Convex AI Gateway use. A missing hackathon.md is not a penalty: repo facts still drive the review, live `/hackathon.md` is a third fallback after the repo file and a pasted log, and a private or missing repo can still show Convex signals from the live scrape (2026-08-25).
+- Component detection now reads every fetched workspace `package.json` and every `convex.config.ts`, and maps known community packages (Firecrawl, Exa, Context.dev, Browser Use, agent-ready) alongside official `@convex-dev/*` components (2026-08-25). `convexGateway("provider/model")` calls in `convex/` source mark Convex AI Gateway use and capture the exact model id, and model id literals passed to the OpenAI and Anthropic SDKs are captured for apps that skip the gateway. Detected gateway use and model ids feed the judge prompt as code facts and are stored on `RepoContext` as `usesAiGateway` and `aiModelIdsDetected` (2026-08-25).
+- Fourth recorded-only hackathon.md cross-check: claimed AI models with no code evidence are flagged as `log lists AI models not found in the repo scan: ...`, matching the components check style. Runs only when the repo scan found model ids, so an empty scan can never produce a false flag, and like the other checks it never changes a score (2026-08-25).
+- Auth evidence now works for monorepos: `detectAuthProvider` reads the root plus workspace `package.json` files, `convex/auth.config.ts|js` naming a clerk. or workos domain proves that provider, and `convex/auth.ts` plus `@convex-dev/auth` in any fetched manifest proves Convex Auth (the beta and v2 alpha share that package). The auth claim comparison is tolerant, so "Convex Auth v2 alpha" claiming "Convex Auth" never flags (2026-08-25).
+- Judging group emails can now reach hackathon teams, not just the person who submitted. A Team members dropdown on the Email submission owners flow picks Submission owners only, Submission owners and team members, or Team members only, pulled from the names and emails entered in Hackathon Team Info on the submit form (2026-08-24).
+- Team recipients show a Team badge with the submission title and team name in the recipient list, can be deselected one at a time, and are previewable like any other recipient. Addresses already used by an owner are only emailed once (2026-08-24).
+- Admin Settings Luma block can set the catalog sidebar heading. Blank uses Upcoming events. The same heading shows on `/events` (2026-08-24).
+- Own-profile header now has a Manage Profile & Account control next to Edit my profile. Same CTA chrome. It jumps to `#manage-profile` (2026-08-23).
+- Signed-out email preference clicks go through sign-in with `?section=email-preferences`, then scroll the Email Preferences card. Signed-in visitors on someone else's profile are sent to their own username (2026-08-23).
+- Luma sidebar cards stack a modest square cover above title, date, location, one-line blurb, and a visible event link. Hairline between events. View all goes to `/events` (2026-08-23).
+- Admin sample send for submission confirmation, new submission group alert, results live, and judging emails, routed through Resend so type toggles do not block the samples (2026-08-23).
+- Admins now get an in-app alert and a `spam_review_request` email when a submitter disputes a spam mark from the notifications page. First request only; gated by the global master switch, a new "Spam review requests" toggle in the Email dashboard, and each admin's own unsubscribe (2026-08-22).
+- Amber "N review requested" chip on the admin Marked spam list that filters to disputed rows, matching the existing count pill pattern (2026-08-22).
+- Shared `standardEmailFooter` and `emailPreferencesUrl` helpers so every email (templates, submissions, spam, judging group sends, and the admin preview) renders one footer with a clickable Manage email preferences link, a per-recipient Unsubscribe link, the open-source credit maintained by WayneSutton.ai, and the CAN-SPAM address (2026-08-22).
+- Judging group sends now match recipients to accounts by email (new `users.by_email` index) so their footers carry a working unsubscribe token and List-Unsubscribe header (2026-08-22).
+- `#email-preferences` deep link on the profile page: email footers land on the Email Preferences card via a fragment, with no new SPA route so `/:username` routing is untouched (2026-08-22).
+- Luma row in Admin Settings Sidebar widgets, including App page (below View Change Log on `/s/:slug`). Entire app stays in sync with Show listed Luma events (2026-08-22).
+- Per judging group Luma hide on submit, join, and judging landing pages. Independent of the other sidebar widgets (2026-08-22).
+- Admin Settings matrix to show or hide Most Vibes This Week, Recent Vibers, and Top Categories This Week per surface (entire app, list, grid, vibe, submit, categories). Entire-app off greys out the rest and wins over judging pages (2026-08-22).
+- Luma events: connect a calendar URL in Settings, pick events, choose thumbnail/name/dates/description, and place them in catalog sidebars, submit, app detail, categories, and `/events`. Hourly Convex sync. API key stays in Convex env as `LUMA_API_KEY` (2026-08-22).
+- Footer Events link to `/events` (2026-08-22).
+- Public `/events` page listing selected Luma events with links out to Luma (2026-08-22).
+- Shared 44px `BackToAppsLink` chevron used on submit, admin, search, tags, leaderboard, events, and story detail (2026-08-22).
+- Geist and Geist Mono as the site typefaces, exposed as `--th-font-sans` and `--th-font-mono` theme tokens and wired into Tailwind `font-sans` / `font-mono` (2026-08-22).
+- Four shared type classes in `@layer components` so the scale lives in one place: `.app-title` (18px), `.app-desc` (16px), `.app-title-sm` (16px), `.app-desc-sm` (15px). All fixed pixel sizes, no fluid `clamp()` (2026-08-22).
+- Closed per-submission AI **Brief** toggle with copy and `.md` save, plus an optional persisted AI cohort summary on Convex Recap generated only from saved review evidence (2026-08-21).
+- Stale-summary detection when a retry, edit, or complete/fail run no longer matches the stored cohort fingerprint (2026-08-21).
+
+### Changed
+
+- AI judge and spam check now route through the hosted Convex AI gateway via one shared `convex/lib/llm.ts` (PR #16). The duplicated Anthropic → OpenAI → OpenRouter fallback chains are gone; the gateway authenticates with the deployment's own service token so no provider API keys are needed. Result rows keep the same provider vocabulary because the provider is read from the gateway model id prefix. The spam check still falls back to its deterministic heuristic, now when the gateway call fails instead of when no key is set. Deps: convex ^1.45.0, ai ^7.0.70, @convex-dev/ai-sdk-provider ^0.1.0 (2026-08-25).
+- Judging group submission recipients are selected by a per-person key instead of a story id, so two people on the same submission can be picked separately. Recipient counts read "team members" or "recipients" when teams are included (2026-08-24).
+- Own-profile Inbox button is now the same height as the Edit my profile and Manage Account & Email buttons next to it (2026-08-24).
+- Profile account section is now titled Manage Profile, Account & Email Preferences (2026-08-24).
+- Profile activity tabs now carry a small chevron so closed lists look openable. It points down when the list is closed and flips up when it opens (2026-08-24).
+- Profile Votes, Ratings Given, Comments, and Bookmarks lists start closed. Mini dashboard cards and tab buttons still open the matching list. Clicking an open tab closes it (2026-08-24).
+- Edit my profile and Manage Account & Email are compact one-line header CTAs. The account button label is now Manage Account & Email (2026-08-24).
+- Luma event square covers are 50 percent larger (108px compact, 144px default) (2026-08-24).
+- Welcome "Complete your profile" now points at `/{username}#manage-profile` (or `/set-username` when the account has no username) (2026-08-23).
+- Manage email preferences still uses `https://vibeapps.dev/{username}#email-preferences`. The profile page now treats that hash like a real in-page anchor (2026-08-23).
+- Upcoming Luma events on app pages render under View Change Log instead of next to the back chevron (2026-08-22).
+- Admin Dashboard header is one row (chevron plus title) with tighter vertical padding (2026-08-22).
+- Catalog sidebar stays off on `/admin`, `/notifications`, `/inbox`, `/leaderboard`, and `/events` so those pages do not waste a column (2026-08-22).
+- Grid view can show the sidebar when a widget or Luma placement is turned on (still off by default) (2026-08-22).
+- Tag page (`/tag/:slug`) header is now one row in list, grid, and vibe: icon-only back chevron, "Apps tagged with" plus the tag pill, and the app count on the right. The stacked "Back to Apps" text and extra page padding are gone so the results column matches the homepage (2026-08-22).
+- List view now sits in one sidebar-matching plate (`bg-surface rounded-lg border border-hairline`) so the ranked rows lift off canvas the same way Most Vibes and Recent Vibers do. Hairline dividers stay inside the plate. Row hover still uses `surface-hover` in light, classic, and dark (2026-08-22).
+- List view rows restyled to match the ranked editorial mockup: two-digit rank, 16:9 screenshot, title plus one tag pill, one-line description, compact byline, `Nc` comment count, and a pill "Vibe it" vote button. Rank type is 15px (under the 18px title) and the vote pill is 32px tall. Hovering a row fills it with `surface-hover` so the wash follows light, classic, and dark (2026-08-22).
+- Grid cards restacked to screenshot on top, title then description, compact time on the left, and an `▲` vote pill on the bottom right. Card and thumbnail radii are unchanged. Tag-page grid uses the same card (2026-08-22).
+- App titles now render at 18px and descriptions at 16px in list, grid, and vibe views, on story detail, user profiles, both leaderboards, the judging interface, and the admin dashboard on a compact scale (2026-08-22).
+- Vibe view vote count moved from Alfa Slab One to Geist at 22px semibold with tabular numerals, so multi-digit counts no longer shift the row (2026-08-22).
+- Meta rows, tag pills, rank numbers, and pin icons scaled one step up so the hierarchy still reads against the larger titles (2026-08-22).
+- Story detail header now sizes correctly at 26px on mobile and 30px from `sm` up. It previously carried an invalid Tailwind class and rendered flat at 20px (2026-08-22).
+- Shared non-pill corner radius is now `0.25rem` across cards, buttons, inputs, thumbnails, submit surfaces, dialogs, and admin panels. Tag pills and header notification/profile round controls stay full-round; header menus stay `0.375rem` (2026-08-21).
+
+### Fixed
+
+- Signed-in pages crashed on production after profile signup with `Uncaught Error: [CONVEX Q(users:getMyUserDocument)] Server Error`. The query returned the raw user document while the return validator omitted later schema fields (`nameCustomized`, `emojiTheme`, `isBanned`, `isPaused`), so Convex rejected the result and `useQuery` in Layout took down the app. `getMyUserDocument` now returns only the validated fields and uses `.first()` so a Clerk webhook plus `ensureUser` race cannot crash on duplicate `clerkId` rows (2026-08-26).
+- Tag pages with zero approved submissions (like a brand new tag) rendered a blank page on production. The empty state in `TagPage.tsx` used `Link` without importing it from react-router-dom, so React threw `ReferenceError: Link is not defined` the first time the "No apps found" branch rendered. Tags with submissions never hit that branch, which is why only empty tags went blank. One line import fix (2026-08-25).
+- Run AI Review on production showed a generic "Server Error" dialog instead of the real reason. Convex redacts plain `Error` messages on prod deployments, so user-facing guards in `startReview` and `retrySubmission` now throw `ConvexError`, whose message reaches the client. The admin AI results header also disables the run button with a hint when the group's AI judge toggle is off, since that disabled toggle was the actual cause of the failed run (2026-08-25).
+- Unsubscribe links in production emails always showed "expired" because the Netlify `/api/unsubscribe` proxy pointed at the dev Convex deployment, so prod tokens were never found. The proxy now targets the prod `.convex.site` host, and the token handler is idempotent so a Gmail one-click POST followed by the user's GET (or a repeat click) shows the confirmation page instead of an error (2026-08-22).
+- Manage email preferences links no longer point at `/profile`, which is not a real route. They now go to `/{username}#email-preferences`, `/set-username` for accounts without a username, or sign-in with a safe relative redirect (2026-08-22).
+- Add a Luma event URL treated lookup `{ id, status }` as a full event, so names never parsed and future events like https://luma.com/abstract-convex-26 never listed. Lookup now fetches `/v1/events/get`, then the public Luma page (2026-08-22).
+
+- Luma add-by-URL used the wrong lookup param and guessed `evt-{slug}`, which returned 403 for listed Convex calendar events. Lookup now uses `url`, sync includes listed-but-hosted-elsewhere events, and calendar-scoped key errors are spelled out (2026-08-22).
+- Email footers now link to `twitter.com/convex` instead of the old `@convex_dev` handle (2026-08-22).
+
+### Removed
+
+- Eudoxus Sans and its third party `stijndv.com` CDN dependency, Alfa Slab One, unused Space Mono, and all three Inter loading paths including the self-hosted `@fontsource/inter` package. Font families dropped from four to two and 17 bundled font files to zero (2026-08-22).
+- `text-rendering: optimizeLegibility`, which enabled discretionary ligatures and softened UI type at small sizes (2026-08-22).
+- User Growth Over Time chart, its query subscription, and the unused `getUserGrowthData` aggregation (2026-08-21).
+
 ## Latest Updates
+
+### [Changed] - 2026-08-22
+
+**List view surface plate**
+
+- Ranked list rows now sit in one sidebar-matching plate (`bg-surface rounded-lg border border-hairline`) so they lift off canvas in light, classic, and dark.
+- Hairline dividers stay inside the plate. Row hover still uses `surface-hover`. Grid and vibe are unchanged.
+- **Files**: `src/components/StoryList.tsx`. Tracked in `prds/list-view-ranked-rows.md`.
+
+### [Changed] - 2026-08-22
+
+**Grid view cards**
+
+- Grid cards now stack screenshot on top, then title, description, compact time on the left, and an `▲` vote pill on the bottom right.
+- Card `rounded-lg` and thumbnail `rounded-md` are unchanged. Tag-page grid uses the same card.
+- **Files**: `src/components/StoryList.tsx`. Tracked in `prds/grid-view-cards.md`.
+
+### [Changed] - 2026-08-22
+
+**Tag page header**
+
+- Category pages now use one identity row in list, grid, and vibe: a 44px back chevron, "Apps tagged with" plus the tag pill, and the app count on the right.
+- The stacked "Back to Apps" text is gone. The header All pill already returns to the catalog; the chevron is for deep links.
+- Extra `max-w-4xl px-4 py-8` padding is gone so the results column matches the homepage.
+- **Files**: `src/pages/TagPage.tsx`. Tracked in `prds/tag-page-header.md`.
+
+### [Changed] - 2026-08-22
+
+**List view ranked rows**
+
+- Homepage list view now follows the ranked editorial mockup: two-digit rank at 15px (under the 18px title), 16:9 screenshot, title with one tag pill beside it, a one-line description, compact byline, `Nc` comment count, and a 32px pill "Vibe it" vote button.
+- Grid and vibe views are unchanged.
+- **Files**: `src/components/StoryList.tsx`. Tracked in `prds/list-view-ranked-rows.md`.
+
+### [Changed] - 2026-08-22
+
+**Geist type system**
+
+- Story titles now render at 18px and descriptions at 16px everywhere they appear, so the same submission reads the same whether you browse in list, grid, or vibe view. Previously list and vibe rows used 15px titles with 13px descriptions while grid cards used 16px and 14px.
+- Four shared type classes replace the arbitrary per-component values that were scattered across a dozen files, so the scale can be adjusted in one place. Sizes are fixed pixels, not fluid.
+- The font stack went from four families to two. Eudoxus Sans (loaded from a third party CDN), Alfa Slab One, Space Mono (never referenced), and Inter (loaded three separate ways) are all gone, replaced by Geist and Geist Mono. The self-hosted `@fontsource/inter` package was also removed, dropping 17 font files from the production bundle.
+- Supporting text scaled up one step to match the larger titles, and the vibe view vote count moved to Geist at 22px semibold with tabular numerals so it keeps the visual weight the slab face gave it.
+- Corner radius is unchanged from the previous release.
+- **Files**: `index.html`, `src/index.css`, `tailwind.config.js`, `package.json`, `src/components/StoryList.tsx`, `src/components/StoryDetail.tsx`, `src/components/WeeklyLeaderboard.tsx`, `src/components/PublicJudgingResultsDashboard.tsx`, `src/pages/UserProfilePage.tsx`, `src/pages/InboxPage.tsx`, `src/pages/LeaderboardPage.tsx`, `src/pages/JudgingInterfacePage.tsx`, `src/pages/AIJudgeResultsPage.tsx`, `src/components/admin/ContentModeration.tsx`, `src/components/admin/AIJudgeResults.tsx`, `src/components/admin/JudgeTracking.tsx`, `src/components/admin/JudgingResultsDashboard.tsx`, `src/components/admin/SpamCheck.tsx`, `src/components/admin/judging/GroupSubmissionsSection.tsx`. Tracked in `prds/geist-type-system.md`.
+
+### [Added] - 2026-08-21
+
+**AI review brief exports and optional cohort summary**
+
+- Each completed submission now has a closed **Brief** toggle. Organizers can inspect the privacy-safe markdown, copy it, or save that submission as a `.md` file.
+- The Convex Recap still builds a deterministic brief for every completed submission with copy and `.md` export. Organizers can now add an optional AI cohort summary generated only from saved review evidence, with no repository rescans, ranking changes, or score changes.
+- AI cohort summaries are admin-only, record the model and generated time, and show an update state when a rerun or admin edit makes the saved summary stale.
+- Cards, buttons, inputs, thumbnails, submit surfaces, dialogs, and admin panels now use `0.25rem` corners. Full tag pills, avatars, notification dots, and profile-adjacent round controls keep their shape.
+- Removed the User Growth Over Time chart, its query subscription, and the now-unused backend aggregation.
+- **Files**: `convex/schema.ts`, `convex/adminQueries.ts`, `convex/aiJudge.ts`, `convex/aiJudgeAnalysis.ts`, `src/components/admin/AIJudgeResults.tsx`, `src/components/admin/NumbersView.tsx`, `src/components/Layout.tsx`, `src/components/ui/dialog.tsx`, `src/index.css`, `tailwind.config.js`. Tracked in `prds/ai-review-briefs-radius-and-admin-cleanup.md`.
+
+### [Added] - 2026-08-19
+
+**Convex team AI judging recap**
+
+- Every completed AI judging result now has a **Copy brief** action that packages the saved score, AI note, verified repository facts, components used in code, live app status, Git timeline flags, and hackathon log checks into privacy-safe markdown (2026-08-19).
+- New **Convex Recap** tab becomes available after the group review finishes. It generates one markdown handoff with cohort counts, verified Convex feature and component totals, and a concise brief for each completed submission, with copy and `.md` download.
+- Recaps are built locally from saved review results. They do not run another model, rescan repositories, change scores, or include submitter emails and team member details. Existing Results, Stats, and Hackathon Report tabs remain unchanged.
+- Component stats and organizer report details now prefer components verified as used in code, with installed components used only as a fallback for older review rows.
+- **Files**: `src/components/admin/AIJudgeResults.tsx`. Tracked in `prds/ai-judge-convex-team-recap.md`.
+
+**External Judging Process guide in Admin Docs**
+
+- New Docs sidebar section **External Judging Process** covers the full human judge flow: access codes vs public groups, name rules, session resume, criteria and comments, status (pending/completed/skip), multi judge completion, collaboration notes, filters, troubleshooting, and a first session checklist (2026-08-19).
+- Every Docs page now has **Copy Markdown** and **Download .md** so organizers can paste the guide into Notion, Google Docs, or email for external judges.
+- **Files**: `src/components/admin/AdminDocs.tsx`.
 
 ### [Added] - 2026-08-17
 

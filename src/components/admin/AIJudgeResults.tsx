@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useAction, useQuery, useMutation } from "convex/react";
 import {
   Sparkles,
   Loader2,
@@ -20,6 +20,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
+import { ConvexError } from "convex/values";
 import { api } from "../../../convex/_generated/api";
 import { Id } from "../../../convex/_generated/dataModel";
 import { Button } from "../ui/button";
@@ -35,6 +36,21 @@ interface AIJudgeResultsProps {
   groupName: string;
 }
 
+// User-facing message from a thrown mutation/action error. ConvexError data
+// survives prod redaction; plain Errors are stripped of their request-id and
+// stack prefixes (and show as "Server Error" on prod deployments).
+function errorMessage(error: unknown): string {
+  if (error instanceof ConvexError && typeof error.data === "string") {
+    return error.data;
+  }
+  if (error instanceof Error) {
+    return error.message
+      .replace(/^\[.*?\]\s*/, "")
+      .replace(/^Uncaught Error:\s*/, "");
+  }
+  return "Please try again.";
+}
+
 type CriteriaScore = {
   key: string;
   label: string;
@@ -44,7 +60,7 @@ type CriteriaScore = {
 
 // Features that count as "advanced" Convex usage for the stats rollup
 const ADVANCED_FEATURE_REGEX =
-  /schedul|cron|file storage|storage|full.?text|search|vector|http action|component|agent|workflow|workpool|aggregate/i;
+  /schedul|cron|file storage|storage|full.?text|search|vector|http action|component|agent|workflow|workpool|aggregate|ai gateway|gateway/i;
 
 // Display labels for detected frontend hosting platforms (keys match
 // AI_FRONTEND_PLATFORMS in convex/aiJudge.ts)
@@ -62,12 +78,15 @@ type StatsResult = {
   criteriaScores?: Array<CriteriaScore>;
   convexFeaturesDetected?: Array<string>;
   componentsDetected?: Array<string>;
+  componentsUsed?: Array<string>;
   urlCheck?: { isLive: boolean };
   sourcesUsed?: {
     github: boolean;
     liveUrl: boolean;
     videoTranscript?: boolean;
   };
+  authProvider?: string;
+  usesAiGateway?: boolean;
 };
 
 // Rollup numbers for the Stats tab and the report overview
@@ -106,20 +125,38 @@ function computeStats(results: Array<StatsResult>) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 12);
 
-  // Components detected from package.json / convex.config.ts (new runs only);
-  // older results fall back to feature strings mentioning "component"
+  // Count components referenced in code. Older rows without componentsUsed
+  // fall back to installed component data for backwards-compatible stats.
   const usesComponents = (r: StatsResult) =>
-    (r.componentsDetected?.length ?? 0) > 0 ||
+    (r.componentsUsed?.length ??
+      r.componentsDetected?.length ??
+      0) > 0 ||
     (r.convexFeaturesDetected || []).some((f) => /component/i.test(f));
   const componentCounts = new Map<string, number>();
   for (const r of completed) {
-    for (const component of r.componentsDetected || []) {
+    for (const component of r.componentsUsed ?? r.componentsDetected ?? []) {
       const key = component.trim().toLowerCase();
       if (!key) continue;
       componentCounts.set(key, (componentCounts.get(key) || 0) + 1);
     }
   }
   const componentsUsed = [...componentCounts.entries()].sort(
+    (a, b) => b[1] - a[1],
+  );
+
+  const usingAuth = (r: StatsResult) =>
+    (r.authProvider !== undefined && r.authProvider !== "none") ||
+    (r.convexFeaturesDetected || []).some((f) => /^auth\b/i.test(f));
+  const usingAiGateway = (r: StatsResult) =>
+    r.usesAiGateway === true ||
+    (r.convexFeaturesDetected || []).some((f) => /ai gateway/i.test(f));
+  const authProviderCounts = new Map<string, number>();
+  for (const r of completed) {
+    if (!r.authProvider || r.authProvider === "none") continue;
+    const key = r.authProvider;
+    authProviderCounts.set(key, (authProviderCounts.get(key) || 0) + 1);
+  }
+  const authProviders = [...authProviderCounts.entries()].sort(
     (a, b) => b[1] - a[1],
   );
 
@@ -143,6 +180,9 @@ function computeStats(results: Array<StatsResult>) {
     advancedConvex: completed.filter(usesAdvanced).length,
     usingComponents: completed.filter(usesComponents).length,
     componentsUsed,
+    usingAuth: completed.filter(usingAuth).length,
+    usingAiGateway: completed.filter(usingAiGateway).length,
+    authProviders,
     liveApps: completed.filter((r) => r.urlCheck?.isLive).length,
     urlChecked: completed.filter((r) => r.urlCheck !== undefined).length,
     reposAnalyzed: completed.filter((r) => r.sourcesUsed?.github).length,
@@ -168,6 +208,12 @@ type ReportSubmission = {
   overallReasoning?: string;
   convexFeaturesDetected?: Array<string>;
   componentsDetected?: Array<string>;
+  componentsUsed?: Array<string>;
+  repoFacts?: RepoFactsSummary;
+  gitFacts?: GitFactsSummary;
+  authProvider?: string;
+  usesAiGateway?: boolean;
+  aiModelIdsDetected?: Array<string>;
   urlCheck?: {
     checkedUrl?: string;
     isLive: boolean;
@@ -185,6 +231,238 @@ type ReportSubmission = {
 // Escape pipes so titles and notes don't break markdown tables
 function mdCell(text: string): string {
   return text.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
+}
+
+type RepoFactsSummary = {
+  convexFileCount: number;
+  hasSchema: boolean;
+  hasHttpRouter: boolean;
+  hasCrons: boolean;
+  tableCount: number;
+  indexCount: number;
+  searchIndexCount: number;
+  vectorIndexCount: number;
+  queryCount: number;
+  mutationCount: number;
+  actionCount: number;
+  httpActionCount: number;
+  usesScheduler: boolean;
+  usesStorage: boolean;
+  usesVectorSearch: boolean;
+  usesAuth: boolean;
+  usesPagination: boolean;
+  returnsValidatorCount: number;
+};
+
+type GitFactsSummary = {
+  firstCommitAt?: number;
+  lastCommitAt?: number;
+  builtDuringEvent: "in_window" | "started_before" | "no_window_set";
+  isFork: boolean;
+  parentRepo?: string;
+};
+
+type SubmissionBrief = {
+  storyTitle: string;
+  storySlug: string;
+  storyUrl?: string;
+  githubUrl?: string;
+  status: string;
+  averageScore?: number;
+  weightedScore?: number;
+  overallReasoning?: string;
+  convexFeaturesDetected?: Array<string>;
+  componentsUsed?: Array<string>;
+  repoFacts?: RepoFactsSummary;
+  gitFacts?: GitFactsSummary;
+  repoAccess?: "public" | "private_or_missing";
+  urlCheck?: {
+    checkedUrl?: string;
+    isLive: boolean;
+    statusCode?: number;
+    note: string;
+  };
+  frontendHosting?: { platform: string; evidence: string };
+  logDiscrepancies?: Array<string>;
+  authProvider?: string;
+  usesAiGateway?: boolean;
+  aiModelIdsDetected?: Array<string>;
+  sourcesUsed?: {
+    github: boolean;
+    liveUrl: boolean;
+    videoTranscript?: boolean;
+  };
+};
+
+// Copy text with a fallback for browsers that block the Clipboard API.
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  }
+}
+
+function submissionBriefLines(
+  submission: SubmissionBrief,
+  rank: number,
+  origin: string,
+  heading: "#" | "##",
+): Array<string> {
+  const lines: Array<string> = [
+    `${heading} ${rank}. ${mdCell(submission.storyTitle)}`,
+    "",
+  ];
+  const links = [`[Submission](${origin}/s/${submission.storySlug})`];
+  if (submission.storyUrl) links.push(`[Live app](${submission.storyUrl})`);
+  if (submission.githubUrl) links.push(`[GitHub](${submission.githubUrl})`);
+  lines.push(`- Links: ${links.join(" · ")}`);
+  lines.push(
+    `- AI review score: ${submission.averageScore !== undefined ? `${submission.averageScore.toFixed(1)}/10` : "not available"}${submission.weightedScore !== undefined ? ` (weighted total ${submission.weightedScore})` : ""}`,
+  );
+  if (submission.overallReasoning) {
+    lines.push(`- AI note: ${submission.overallReasoning}`);
+  }
+
+  lines.push("", `${heading}# Verified Convex evidence`, "");
+  if (submission.repoFacts) {
+    const facts = submission.repoFacts;
+    lines.push(
+      `- Repository facts: ${facts.convexFileCount} Convex files, ${facts.tableCount} tables, ${facts.indexCount} indexes, ${facts.queryCount} queries, ${facts.mutationCount} mutations, ${facts.actionCount} actions, ${facts.httpActionCount} HTTP actions, ${facts.returnsValidatorCount} return validators`,
+    );
+    const signals = [
+      facts.hasSchema && "schema",
+      facts.hasHttpRouter && "HTTP router",
+      facts.hasCrons && "crons",
+      facts.usesScheduler && "scheduler",
+      facts.usesStorage && "file storage",
+      facts.searchIndexCount > 0 && "full text search",
+      (facts.vectorIndexCount > 0 || facts.usesVectorSearch) && "vector search",
+      facts.usesAuth && "auth",
+      facts.usesPagination && "pagination",
+    ].filter((signal): signal is string => Boolean(signal));
+    lines.push(
+      `- Verified signals: ${signals.length > 0 ? signals.join(", ") : "none detected"}`,
+    );
+  } else {
+    lines.push("- Repository facts: not available");
+  }
+  lines.push(
+    `- Components used in code: ${submission.componentsUsed?.length ? submission.componentsUsed.join(", ") : "none verified"}`,
+  );
+  lines.push(
+    `- Detected Convex features: ${submission.convexFeaturesDetected?.length ? submission.convexFeaturesDetected.join(", ") : "none recorded"}`,
+  );
+  if (submission.authProvider && submission.authProvider !== "none") {
+    lines.push(`- Auth provider: ${submission.authProvider}`);
+  } else if (submission.authProvider === "none") {
+    lines.push("- Auth provider: none detected");
+  }
+  if (submission.usesAiGateway) {
+    lines.push(
+      `- Convex AI Gateway: yes${submission.aiModelIdsDetected?.length ? ` (${submission.aiModelIdsDetected.join(", ")})` : ""}`,
+    );
+  } else if (submission.usesAiGateway === false) {
+    lines.push("- Convex AI Gateway: no");
+  }
+
+  lines.push("", `${heading}# Review checks`, "");
+  if (submission.urlCheck) {
+    lines.push(
+      `- Live app: ${submission.urlCheck.isLive ? "live" : submission.urlCheck.statusCode === 404 ? "404" : "not working"} (${submission.urlCheck.note})`,
+    );
+  } else {
+    lines.push("- Live app: not checked");
+  }
+  if (submission.frontendHosting) {
+    lines.push(
+      `- Frontend hosting: ${FRONTEND_PLATFORM_LABELS[submission.frontendHosting.platform] ?? submission.frontendHosting.platform} (${submission.frontendHosting.evidence})`,
+    );
+  }
+  if (submission.repoAccess === "private_or_missing") {
+    lines.push("- Repository access: private, missing, or deleted");
+  }
+  if (submission.gitFacts?.isFork) {
+    lines.push(
+      `- Repository: fork${submission.gitFacts.parentRepo ? ` of ${submission.gitFacts.parentRepo}` : ""}`,
+    );
+  }
+  if (submission.gitFacts?.builtDuringEvent === "started_before") {
+    lines.push(
+      "- Build timeline: first commit predates the event window; organizer review recommended",
+    );
+  }
+  for (const discrepancy of submission.logDiscrepancies ?? []) {
+    lines.push(`- Hackathon log check: ${discrepancy}`);
+  }
+
+  return lines;
+}
+
+function buildSubmissionBrief(
+  submission: SubmissionBrief,
+  rank: number,
+  origin: string,
+): string {
+  return submissionBriefLines(submission, rank, origin, "#").join("\n");
+}
+
+// Build a privacy-safe handoff from stored review evidence. No team member or
+// submitter contact data is accepted by this function.
+function buildConvexTeamRecap(
+  groupName: string,
+  submissions: Array<SubmissionBrief>,
+  origin: string,
+  aiSummary?: string,
+): string {
+  const completed = submissions.filter((row) => row.status === "completed");
+  const stats = computeStats(submissions);
+  const lines: Array<string> = [
+    `# ${groupName} Convex AI review recap`,
+    "",
+    `Generated ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })} from saved AI judge results. This recap contains no submitter emails or team member details.`,
+    "",
+    "## Overview",
+    "",
+    `- ${completed.length} completed reviews from ${submissions.length} submissions`,
+    `- ${stats.usingConvex} apps with detected Convex usage`,
+    `- ${stats.advancedConvex} apps with advanced Convex usage`,
+    `- ${stats.usingAuth} apps with a detected auth provider`,
+    `- ${stats.usingAiGateway} apps using Convex AI Gateway`,
+    `- ${stats.liveApps} live apps from ${stats.urlChecked} checked URLs`,
+    `- ${stats.reposAnalyzed} repositories analyzed`,
+    `- ${stats.averageScore}/10 average AI review score`,
+    "",
+    "## Cohort signals",
+    "",
+    `- Components used in code: ${stats.componentsUsed.length > 0 ? stats.componentsUsed.map(([name, count]) => `${name} (${count})`).join(", ") : "none verified"}`,
+    `- Auth providers: ${stats.authProviders.length > 0 ? stats.authProviders.map(([name, count]) => `${name} (${count})`).join(", ") : "none detected"}`,
+    `- Convex AI Gateway: ${stats.usingAiGateway} of ${stats.completed} reviewed apps`,
+    `- Top Convex features: ${stats.topFeatures.length > 0 ? stats.topFeatures.map(([name, count]) => `${name} (${count})`).join(", ") : "none recorded"}`,
+  ];
+
+  if (aiSummary) {
+    lines.push(
+      "",
+      "## AI cohort summary",
+      "",
+      aiSummary.replace(/^## /gm, "### "),
+    );
+  }
+
+  for (const [index, submission] of completed.entries()) {
+    lines.push(
+      "",
+      ...submissionBriefLines(submission, index + 1, origin, "##"),
+    );
+  }
+
+  return lines.join("\n");
 }
 
 // Build the full hackathon report as markdown (pastes into Notion/Google Docs)
@@ -241,6 +519,10 @@ function buildHackathonReport(
   lines.push(
     `| Apps using Convex components | ${stats.usingComponents}${stats.componentsUsed.length > 0 ? ` (${stats.componentsUsed.length} distinct: ${stats.componentsUsed.map(([name]) => name).join(", ")})` : ""} |`,
   );
+  lines.push(
+    `| Apps with detected auth | ${stats.usingAuth}${stats.authProviders.length > 0 ? ` (${stats.authProviders.map(([name, count]) => `${name} ${count}`).join(", ")})` : ""} |`,
+  );
+  lines.push(`| Apps using Convex AI Gateway | ${stats.usingAiGateway} |`);
   lines.push(
     `| Live apps at review time | ${stats.liveApps} of ${stats.urlChecked} checked |`,
   );
@@ -334,8 +616,21 @@ function buildHackathonReport(
     if (s.convexFeaturesDetected && s.convexFeaturesDetected.length > 0) {
       lines.push(`- Convex features: ${s.convexFeaturesDetected.join(", ")}`);
     }
-    if (s.componentsDetected && s.componentsDetected.length > 0) {
-      lines.push(`- Convex components: ${s.componentsDetected.join(", ")}`);
+    const reportComponents = s.componentsUsed ?? s.componentsDetected;
+    if (reportComponents && reportComponents.length > 0) {
+      lines.push(`- Convex components used: ${reportComponents.join(", ")}`);
+    }
+    if (s.authProvider && s.authProvider !== "none") {
+      lines.push(`- Auth provider: ${s.authProvider}`);
+    } else if (s.authProvider === "none") {
+      lines.push("- Auth provider: none detected");
+    }
+    if (s.usesAiGateway) {
+      lines.push(
+        `- Convex AI Gateway: yes${s.aiModelIdsDetected?.length ? ` (${s.aiModelIdsDetected.join(", ")})` : ""}`,
+      );
+    } else if (s.usesAiGateway === false) {
+      lines.push("- Convex AI Gateway: no");
     }
     if (s.criteriaScores && s.criteriaScores.length > 0) {
       lines.push(
@@ -460,6 +755,9 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
   const startReview = useMutation(api.aiJudge.startReview);
   const retrySubmission = useMutation(api.aiJudge.retrySubmission);
   const updateResultScore = useMutation(api.aiJudge.updateResultScore);
+  const generateGroupSummary = useAction(
+    api.aiJudgeAnalysis.generateGroupSummary,
+  );
   const { showMessage, DialogComponents } = useDialog();
 
   const [isStarting, setIsStarting] = useState(false);
@@ -470,15 +768,26 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
   const [editScores, setEditScores] = useState<Array<CriteriaScore>>([]);
   const [editOverall, setEditOverall] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
-  const [activeTab, setActiveTab] = useState<"results" | "stats" | "report">(
-    "results",
-  );
+  const [activeTab, setActiveTab] = useState<
+    "results" | "stats" | "recap" | "report"
+  >("results");
   // Build-timeline filter (Phase 3): all / built in window / started before
   const [timelineFilter, setTimelineFilter] = useState<
     "all" | "in_window" | "started_before"
   >("all");
   const [reportMarkdown, setReportMarkdown] = useState<string | null>(null);
   const [reportCopied, setReportCopied] = useState(false);
+  const [recapMarkdown, setRecapMarkdown] = useState<string | null>(null);
+  const [recapCopied, setRecapCopied] = useState(false);
+  const [copiedBriefId, setCopiedBriefId] =
+    useState<Id<"aiJudgeResults"> | null>(null);
+  const [openBriefId, setOpenBriefId] =
+    useState<Id<"aiJudgeResults"> | null>(null);
+  const [isGeneratingGroupSummary, setIsGeneratingGroupSummary] =
+    useState(false);
+  const [groupSummaryError, setGroupSummaryError] = useState<string | null>(
+    null,
+  );
 
   const isRunning =
     (data?.counts.pending ?? 0) > 0 || (data?.counts.running ?? 0) > 0;
@@ -500,17 +809,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
 
   const handleCopyReport = async () => {
     if (!reportMarkdown) return;
-    try {
-      await navigator.clipboard.writeText(reportMarkdown);
-    } catch {
-      // Clipboard API unavailable: fall back to a temporary textarea
-      const textarea = document.createElement("textarea");
-      textarea.value = reportMarkdown;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-    }
+    await copyText(reportMarkdown);
     setReportCopied(true);
     setTimeout(() => setReportCopied(false), 2000);
   };
@@ -528,6 +827,93 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
     URL.revokeObjectURL(url);
   };
 
+  const handleGenerateRecap = () => {
+    if (!data) return;
+    setRecapMarkdown(
+      buildConvexTeamRecap(
+        groupName,
+        data.results,
+        window.location.origin,
+        data.groupSummary?.isStale
+          ? undefined
+          : data.groupSummary?.markdown,
+      ),
+    );
+  };
+
+  const handleCopyRecap = async () => {
+    if (!recapMarkdown) return;
+    await copyText(recapMarkdown);
+    setRecapCopied(true);
+    setTimeout(() => setRecapCopied(false), 2000);
+  };
+
+  const handleDownloadRecap = () => {
+    if (!recapMarkdown) return;
+    const blob = new Blob([recapMarkdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${groupName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "judging-group"}-convex-recap.md`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCopyBrief = async (
+    result: SubmissionBrief & { _id: Id<"aiJudgeResults"> },
+    rank: number,
+  ) => {
+    await copyText(
+      buildSubmissionBrief(result, rank, window.location.origin),
+    );
+    setCopiedBriefId(result._id);
+    setTimeout(() => setCopiedBriefId(null), 2000);
+  };
+
+  const handleDownloadBrief = (
+    result: SubmissionBrief & { _id: Id<"aiJudgeResults"> },
+    rank: number,
+  ) => {
+    const markdown = buildSubmissionBrief(
+      result,
+      rank,
+      window.location.origin,
+    );
+    const blob = new Blob([markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${result.storySlug || "submission"}-ai-brief.md`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleGenerateGroupSummary = async () => {
+    setIsGeneratingGroupSummary(true);
+    setGroupSummaryError(null);
+    try {
+      const summary = await generateGroupSummary({ groupId });
+      if (data) {
+        setRecapMarkdown(
+          buildConvexTeamRecap(
+            groupName,
+            data.results,
+            window.location.origin,
+            summary.markdown,
+          ),
+        );
+      }
+    } catch (error) {
+      setGroupSummaryError(errorMessage(error));
+    } finally {
+      setIsGeneratingGroupSummary(false);
+    }
+  };
+
   const handleStartReview = async () => {
     setIsStarting(true);
     try {
@@ -538,15 +924,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
         "success",
       );
     } catch (error) {
-      showMessage(
-        "Could Not Start AI Review",
-        error instanceof Error
-          ? error.message
-              .replace(/^\[.*?\]\s*/, "")
-              .replace(/^Uncaught Error:\s*/, "")
-          : "Please try again.",
-        "error",
-      );
+      showMessage("Could Not Start AI Review", errorMessage(error), "error");
     } finally {
       setIsStarting(false);
     }
@@ -556,11 +934,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
     try {
       await retrySubmission({ resultId });
     } catch (error) {
-      showMessage(
-        "Retry Failed",
-        error instanceof Error ? error.message : "Please try again.",
-        "error",
-      );
+      showMessage("Retry Failed", errorMessage(error), "error");
     }
   };
 
@@ -636,6 +1010,10 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
     (r) => r.status === "completed",
   );
 
+  // Runs can only start while the group's AI judge toggle is on; default to
+  // true while loading so the button doesn't flash disabled
+  const aiEnabled = data?.aiJudgeEnabled ?? true;
+
   // Rank numbers come from the full ranked list so filtering never renumbers
   const rankById = new Map(
     (data?.results || []).map((r, index) => [r._id, index + 1]),
@@ -663,25 +1041,33 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
           <Sparkles className="w-4 h-4" />
           AI Judge: Best Use of Convex
         </h2>
-        <Button
-          onClick={handleStartReview}
-          disabled={isStarting || isRunning}
-          className="bg-cta hover:bg-cta-hover"
-        >
-          {isStarting || isRunning ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              {isRunning ? "Review in progress..." : "Starting..."}
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4 mr-2" />
-              {completedResults.length > 0
-                ? "Re-run AI Review"
-                : "Run AI Review"}
-            </>
+        <div className="flex items-center gap-3">
+          {!aiEnabled && (
+            <span className="text-sm text-soft">
+              AI judge is turned off. Enable it in the AI judge section to run
+              a review.
+            </span>
           )}
-        </Button>
+          <Button
+            onClick={handleStartReview}
+            disabled={isStarting || isRunning || !aiEnabled}
+            className="bg-cta hover:bg-cta-hover"
+          >
+            {isStarting || isRunning ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                {isRunning ? "Review in progress..." : "Starting..."}
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4 mr-2" />
+                {completedResults.length > 0
+                  ? "Re-run AI Review"
+                  : "Run AI Review"}
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {data === undefined && <div>Loading AI results...</div>}
@@ -726,8 +1112,8 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
             ))}
           </div>
 
-          {/* Tabs: results / stats / hackathon report */}
-          <div className="flex items-center gap-1 border-b border-hairline">
+          {/* Tabs: results / stats / Convex recap / organizer report */}
+          <div className="flex flex-wrap items-center gap-1 border-b border-hairline">
             <button
               onClick={() => setActiveTab("results")}
               className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
@@ -759,6 +1145,25 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
               Stats
             </button>
             <button
+              onClick={() => reportReady && setActiveTab("recap")}
+              disabled={!reportReady}
+              title={
+                reportReady
+                  ? "Generate a privacy-safe recap for the Convex team"
+                  : "Available after every submission has been reviewed"
+              }
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                activeTab === "recap"
+                  ? "border-ink text-ink"
+                  : reportReady
+                    ? "border-transparent text-soft hover:text-copy"
+                    : "border-transparent text-faint cursor-not-allowed"
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              Convex Recap
+            </button>
+            <button
               onClick={() => reportReady && setActiveTab("report")}
               disabled={!reportReady}
               title={
@@ -781,6 +1186,142 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
 
           {activeTab === "stats" && statsReady && (
             <StatsPanel groupName={groupName} results={data.results} />
+          )}
+
+          {activeTab === "recap" && reportReady && (
+            <div className="space-y-4">
+              <div className="bg-surface rounded-lg border border-hairline p-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium text-ink">
+                    Convex Team Recap
+                  </h3>
+                  <p className="text-xs text-soft mt-0.5">
+                    A privacy-safe markdown handoff built from saved review
+                    evidence. It contains no submitter emails or team member
+                    details and does not run another AI review.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    onClick={handleGenerateRecap}
+                    className="bg-cta hover:bg-cta-hover"
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    {recapMarkdown ? "Regenerate Recap" : "Generate Recap"}
+                  </Button>
+                  {recapMarkdown && (
+                    <>
+                      <Button variant="outline" onClick={handleCopyRecap}>
+                        {recapCopied ? (
+                          <>
+                            <Check className="w-4 h-4 mr-2" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4 mr-2" />
+                            Copy Markdown
+                          </>
+                        )}
+                      </Button>
+                      <Button variant="outline" onClick={handleDownloadRecap}>
+                        <Download className="w-4 h-4 mr-2" />
+                        Download .md
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-surface rounded-lg border border-hairline p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-medium text-ink">
+                        AI Cohort Summary
+                      </h3>
+                      {data.groupSummary && (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs ${
+                            data.groupSummary.isStale
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-green-50 text-green-700"
+                          }`}
+                        >
+                          {data.groupSummary.isStale
+                            ? "Update available"
+                            : "Current"}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-soft mt-0.5 max-w-2xl">
+                      Optional AI-written patterns and recommendations from the
+                      saved reviews. It does not rescan repositories, rank
+                      submissions, or change scores.
+                    </p>
+                    {data.groupSummary && (
+                      <p className="text-xs text-faint mt-1">
+                        Generated{" "}
+                        {new Date(
+                          data.groupSummary.generatedAt,
+                        ).toLocaleString()}{" "}
+                        via {data.groupSummary.provider} (
+                        {data.groupSummary.model})
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleGenerateGroupSummary()}
+                    disabled={isGeneratingGroupSummary}
+                  >
+                    {isGeneratingGroupSummary ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4 mr-2" />
+                    )}
+                    {isGeneratingGroupSummary
+                      ? "Generating"
+                      : data.groupSummary
+                        ? "Regenerate AI Summary"
+                        : "Generate AI Summary"}
+                  </Button>
+                </div>
+                {groupSummaryError && (
+                  <p
+                    className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+                    role="alert"
+                  >
+                    {groupSummaryError}
+                  </p>
+                )}
+                {data.groupSummary && (
+                  <pre className="mt-4 max-h-80 overflow-y-auto whitespace-pre-wrap border-t border-hairline pt-4 font-sans text-sm text-copy">
+                    {data.groupSummary.markdown}
+                  </pre>
+                )}
+              </div>
+
+              {recapMarkdown ? (
+                <div className="bg-surface rounded-lg border border-hairline p-4">
+                  <pre className="whitespace-pre-wrap text-sm text-ink font-mono max-h-[36rem] overflow-y-auto">
+                    {recapMarkdown}
+                  </pre>
+                </div>
+              ) : (
+                <div className="text-center py-10 text-soft bg-surface rounded-lg border border-hairline">
+                  <FileText className="w-12 h-12 mx-auto mb-4 text-faint" />
+                  <p className="text-lg font-medium mb-2">
+                    Ready to build the Convex recap
+                  </p>
+                  <p className="text-sm max-w-md mx-auto">
+                    Generate one document with cohort signals, verified Convex
+                    usage, live app checks, and a concise brief for every
+                    completed submission.
+                  </p>
+                </div>
+              )}
+            </div>
           )}
 
           {activeTab === "report" && reportReady && (
@@ -910,6 +1451,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
               {visibleResults.map((result) => {
                 const index = (rankById.get(result._id) ?? 1) - 1;
                 const isExpanded = expandedId === result._id;
+                const isBriefOpen = openBriefId === result._id;
                 const isEditing = editingId === result._id;
                 return (
                   <div
@@ -930,7 +1472,7 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                               href={`/s/${result.storySlug}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="font-medium text-ink hover:underline truncate"
+                              className="app-title-sm text-ink hover:underline truncate"
                             >
                               {result.storyTitle}
                             </a>
@@ -1022,6 +1564,27 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                                 {result.hackathonLogEvent}
                               </span>
                             )}
+                            {result.authProvider &&
+                              result.authProvider !== "none" && (
+                                <span
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200"
+                                  title="Auth library detected from package.json or convex/auth config. Independent of hackathon.md."
+                                >
+                                  {result.authProvider}
+                                </span>
+                              )}
+                            {result.usesAiGateway && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-green-50 text-green-700 border-green-200"
+                                title={
+                                  result.aiModelIdsDetected?.length
+                                    ? `Convex AI Gateway used. Models: ${result.aiModelIdsDetected.join(", ")}`
+                                    : "convexGateway() found in convex/ source"
+                                }
+                              >
+                                AI Gateway
+                              </span>
+                            )}
                             {(result.logDiscrepancies?.length ?? 0) > 0 && (
                               <span
                                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200"
@@ -1110,6 +1673,31 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                         {result.status === "completed" && (
                           <button
                             onClick={() =>
+                              setOpenBriefId(
+                                isBriefOpen ? null : result._id,
+                              )
+                            }
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-copy hover:text-ink bg-surface hover:bg-surface-hover rounded-lg border border-hairline hover:border-hairline-strong transition-colors font-medium"
+                            title={
+                              isBriefOpen
+                                ? "Close submission brief"
+                                : "Open a privacy-safe submission brief"
+                            }
+                            aria-expanded={isBriefOpen}
+                            aria-controls={`brief-${result._id}`}
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            Brief
+                            {isBriefOpen ? (
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
+                        {result.status === "completed" && (
+                          <button
+                            onClick={() =>
                               setExpandedId(isExpanded ? null : result._id)
                             }
                             className="p-2 text-soft hover:text-copy hover:bg-surface-hover rounded-lg transition-colors"
@@ -1131,6 +1719,60 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                         <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3">
                           {result.error}
                         </p>
+                      </div>
+                    )}
+
+                    {isBriefOpen && result.status === "completed" && (
+                      <div
+                        id={`brief-${result._id}`}
+                        className="border-t border-hairline bg-surface-alt p-4"
+                      >
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h4 className="text-sm font-medium text-ink">
+                              Submission Brief
+                            </h4>
+                            <p className="text-xs text-soft">
+                              Privacy-safe markdown built from this saved
+                              review.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                void handleCopyBrief(result, index + 1)
+                              }
+                            >
+                              {copiedBriefId === result._id ? (
+                                <Check className="mr-1.5 h-3.5 w-3.5" />
+                              ) : (
+                                <Copy className="mr-1.5 h-3.5 w-3.5" />
+                              )}
+                              {copiedBriefId === result._id
+                                ? "Copied"
+                                : "Copy Markdown"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                handleDownloadBrief(result, index + 1)
+                              }
+                            >
+                              <Download className="mr-1.5 h-3.5 w-3.5" />
+                              Save .md
+                            </Button>
+                          </div>
+                        </div>
+                        <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-md border border-hairline bg-surface p-3 font-mono text-xs text-copy">
+                          {buildSubmissionBrief(
+                            result,
+                            index + 1,
+                            window.location.origin,
+                          )}
+                        </pre>
                       </div>
                     )}
 
@@ -1433,9 +2075,21 @@ export function AIJudgeResults({ groupId, groupName }: AIJudgeResultsProps) {
                                       : "bg-surface-alt text-faint border-hairline"
                                   }`}
                                 >
-                                  {label}
+                                  {label === "auth" &&
+                                  result.authProvider &&
+                                  result.authProvider !== "none"
+                                    ? `auth (${result.authProvider})`
+                                    : label}
                                 </span>
                               ))}
+                              {result.usesAiGateway && (
+                                <span className="px-2 py-0.5 text-xs rounded-full border bg-green-50 text-green-700 border-green-200">
+                                  AI Gateway
+                                  {result.aiModelIdsDetected?.length
+                                    ? ` (${result.aiModelIdsDetected.join(", ")})`
+                                    : ""}
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}
@@ -1638,6 +2292,21 @@ function StatsPanel({
           : "from package.json / convex.config.ts",
     },
     {
+      label: "Using auth",
+      value: `${stats.usingAuth}`,
+      sub:
+        stats.authProviders.length > 0
+          ? stats.authProviders
+              .map(([name, count]) => `${name} ${count}`)
+              .join(", ")
+          : "Clerk, WorkOS, Convex Auth, Better Auth",
+    },
+    {
+      label: "Using AI Gateway",
+      value: `${stats.usingAiGateway}`,
+      sub: "convexGateway() in convex/ source",
+    },
+    {
       label: "Live apps",
       value: `${stats.liveApps}`,
       sub:
@@ -1763,6 +2432,45 @@ function StatsPanel({
           )}
         </div>
 
+        {/* Auth providers detected from package.json / auth config */}
+        <div>
+          <h4 className="text-sm font-medium text-ink mb-3">
+            Auth providers detected
+          </h4>
+          {stats.authProviders.length === 0 ? (
+            <p className="text-sm text-soft">
+              No auth library detected yet. Clerk, WorkOS, Convex Auth (including
+              v2 alpha), and Better Auth are read from package.json and
+              convex/auth config during the review.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {stats.authProviders.map(([provider, count]) => (
+                <div key={provider} className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-0.5">
+                      <span className="text-sm text-copy truncate">
+                        {provider}
+                      </span>
+                      <span className="text-xs text-soft flex-shrink-0">
+                        {count} app{count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-surface-alt rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-cta rounded-full"
+                        style={{
+                          width: `${(count / Math.max(1, ...stats.authProviders.map(([, c]) => c))) * 100}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Score distribution */}
         <div>
           <h4 className="text-sm font-medium text-ink mb-3">
@@ -1791,10 +2499,14 @@ function StatsPanel({
 
       <p className="text-xs text-faint pt-2 border-t border-hairline">
         Generated by the vibeapps AI Judge. "Using Convex" counts apps with at
-        least one detected Convex feature; "Advanced" counts scheduler, crons,
-        file storage, search, vector, HTTP actions, components, or agents.
-        Components are detected from each repo's package.json and
-        convex.config.ts and raise the advanced score.
+        least one detected Convex feature from the repo, or live-site Convex
+        signals when the repo is private or missing. A missing hackathon.md is
+        not a penalty. "Advanced" counts scheduler, crons, file storage, search,
+        vector, HTTP actions, components, agents, or AI Gateway. Auth and AI
+        Gateway are measured from source (Clerk, WorkOS, Convex Auth including
+        v2, Better Auth, and convexGateway()). Components are detected from
+        each repo's package.json and convex.config.ts, including official
+        @convex-dev packages and known community components.
       </p>
     </div>
   );

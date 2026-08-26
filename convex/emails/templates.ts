@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalQuery } from "../_generated/server";
+import { standardEmailFooter } from "./render";
 
 /**
  * Generate daily admin email template with platform metrics
@@ -92,20 +93,7 @@ export const generateDailyAdminEmail = internalQuery({
               This is an automated report from VibeApps admin system.
             </p>
             
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
-              
-              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
-                <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
-                <p style="margin: 5px 0;">You can manage which email notifications you receive and unsubscribe from your profile page.</p>
-                <p style="margin: 5px 0;">VibeApps is an <a href="https://github.com/waynesutton/vibeapps" style="color: #666;">open-source project</a>.</p>
-                <p style="margin: 5px 0;">Convex, 444 De Haro St Ste 218, San Francisco, CA 94107-2398 USA</p>
-                <p style="margin: 5px 0;">
-                  Follow us on <a href="https://twitter.com/convex_dev" style="color: #666;">Twitter</a> or <a href="https://www.linkedin.com/company/convex-dev/" style="color: #666;">LinkedIn</a>. 
-                  <a href="https://github.com/get-convex/convex-backend" style="color: #666;">Star on Github</a>
-                </p>
-              </div>
-            </div>
+            ${standardEmailFooter({ userId: args.userId, username: args.userUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -155,46 +143,33 @@ export const generateWelcomeEmail = internalQuery({
               <div style="margin: 15px 0;">
                 <strong>Explore Apps</strong><br>
                 Browse apps by category<br>
-                <a href="https://vibe.isllm.com" style="color: #292929;">Explore Apps â†’</a>
+                <a href="https://vibe.isllm.com" style="color: #292929;">Explore Apps â†?/a>
               </div>
               
               <div style="margin: 15px 0;">
                 <strong>Submit Your App</strong><br>
                 Share your project with the community<br>
-                <a href="https://vibe.isllm.com/submit" style="color: #292929;">Submit App â†’</a>
+                <a href="https://vibe.isllm.com/submit" style="color: #292929;">Submit App â†?/a>
               </div>
               
               <div style="margin: 15px 0;">
                 <strong>See what's trending</strong><br>
                 Vote  for your favorite apps<br>
-                <a href="https://vibe.isllm.com/leaderboard" style="color: #292929;">Check out the leaderboard â†’</a>
+                <a href="https://vibe.isllm.com/leaderboard" style="color: #292929;">Check out the leaderboard â†?/a>
               </div>
               
               <div style="margin: 15px 0;">
                 <strong>Set up your profile</strong><br>
                 Choose your username, add your bio, upload a profile picture and enable or disable email notifications for your inbox. <br>
-                <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : "https://vibe.isllm.com/set-username"}" style="color: #292929;">Complete your profile â†’</a>
+                <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}#manage-profile` : "https://vibe.isllm.com/set-username"}" style="color: #292929;">Complete your profile â†?/a>
               </div>
             </div>
 
           
             
-            <p>Happy building!<br>VibeApps</p>
+            <p>Happy building!<br>vibe.isllm.com</p>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences in the Manage Profile & Account section on your profile page.</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
-              
-              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
-                <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
-                <p style="margin: 5px 0;">You can manage which email notifications you receive and unsubscribe from your profile page.</p>
-                <p style="margin: 5px 0;">VibeApps is an <a href="https://github.com/waynesutton/vibeapps" style="color: #666;">open-source project</a>.</p>
-                <p style="margin: 5px 0;">Convex, 444 De Haro St Ste 218, San Francisco, CA 94107-2398 USA</p>
-                <p style="margin: 5px 0;">
-                  Follow us on <a href="https://twitter.com/convex_dev" style="color: #666;">Twitter</a> or <a href="https://www.linkedin.com/company/convex-dev/" style="color: #666;">LinkedIn</a>. 
-                  <a href="https://github.com/get-convex/convex-backend" style="color: #666;">Star on Github</a>
-                </p>
-              </div>
-            </div>
+            ${standardEmailFooter({ userId: args.userId, username: args.userUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -223,7 +198,7 @@ export const generateEngagementEmail = internalQuery({
           ratings: v.number(),
           comments: v.number(),
           bookmarks: v.number(),
-        }),
+        })
       ),
     }),
     newFollowers: v.optional(v.array(v.string())),
@@ -234,8 +209,8 @@ export const generateEngagementEmail = internalQuery({
           author: v.string(),
           storyId: v.id("stories"),
           storySlug: v.optional(v.string()),
-        }),
-      ),
+        })
+      )
     ),
     mentions: v.optional(
       v.array(
@@ -244,8 +219,8 @@ export const generateEngagementEmail = internalQuery({
           storyTitle: v.string(),
           contentExcerpt: v.string(),
           context: v.union(v.literal("comment"), v.literal("judge_note")),
-        }),
-      ),
+        })
+      )
     ),
     replies: v.optional(
       v.array(
@@ -253,22 +228,22 @@ export const generateEngagementEmail = internalQuery({
           replierName: v.string(),
           storyTitle: v.string(),
           contentExcerpt: v.string(),
-        }),
-      ),
+        })
+      )
     ),
     pinnedStories: v.optional(
       v.array(
         v.object({
           storyTitle: v.string(),
-        }),
-      ),
+        })
+      )
     ),
     adminMessages: v.optional(
       v.array(
         v.object({
           storyTitle: v.string(),
-        }),
-      ),
+        })
+      )
     ),
     inboxMessages: v.optional(
       v.array(
@@ -276,8 +251,8 @@ export const generateEngagementEmail = internalQuery({
           senderId: v.id("users"),
           senderName: v.string(),
           messageCount: v.number(),
-        }),
-      ),
+        })
+      )
     ), // Inbox messages received today with sender info
     unsubscribeToken: v.optional(v.string()),
   },
@@ -290,28 +265,21 @@ export const generateEngagementEmail = internalQuery({
 
     const generateAppSection = (app: any) => {
       const engagements = [];
-      if (app.votes > 0)
-        engagements.push(`${app.votes} new vote${app.votes !== 1 ? "s" : ""}`);
+      if (app.votes > 0) engagements.push(`${app.votes} new vote${app.votes !== 1 ? "s" : ""}`);
       if (app.ratings > 0)
-        engagements.push(
-          `${app.ratings} new rating${app.ratings !== 1 ? "s" : ""}`,
-        );
+        engagements.push(`${app.ratings} new rating${app.ratings !== 1 ? "s" : ""}`);
       if (app.comments > 0)
-        engagements.push(
-          `${app.comments} new comment${app.comments !== 1 ? "s" : ""}`,
-        );
+        engagements.push(`${app.comments} new comment${app.comments !== 1 ? "s" : ""}`);
       if (app.bookmarks > 0)
-        engagements.push(
-          `${app.bookmarks} new bookmark${app.bookmarks !== 1 ? "s" : ""}`,
-        );
+        engagements.push(`${app.bookmarks} new bookmark${app.bookmarks !== 1 ? "s" : ""}`);
 
       return `
         <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 10px 0;">
           <h3 style="margin-top: 0; color: #292929;">${app.storyTitle}</h3>
           <ul style="list-style: none; padding: 0;">
-            ${engagements.map((eng) => `<li>â€¢ ${eng}</li>`).join("")}
+            ${engagements.map((eng) => `<li>â€?${eng}</li>`).join("")}
           </ul>
-          <a href="https://vibe.isllm.com/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">View App â†’</a>
+          <a href="https://vibe.isllm.com/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">View App â†?/a>
         </div>
       `;
     };
@@ -322,7 +290,7 @@ export const generateEngagementEmail = internalQuery({
       <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 10px 0;">
         <h3 style="margin-top: 0; color: #292929;">New followers today: ${args.newFollowers.length}</h3>
         <ul style="list-style: none; padding: 0;">
-          ${args.newFollowers.map((follower) => `<li>â€¢ ${follower}</li>`).join("")}
+          ${args.newFollowers.map((follower) => `<li>â€?${follower}</li>`).join("")}
         </ul>
       </div>
     `
@@ -334,7 +302,7 @@ export const generateEngagementEmail = internalQuery({
       <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 10px 0;">
         <h3 style="margin-top: 0; color: #292929;">New submissions from people you follow:</h3>
         <ul style="list-style: none; padding: 0;">
-          ${args.followedSubmissions.map((sub) => `<li>â€¢ <a href="https://vibe.isllm.com/s/${sub.storySlug || sub.storyId}" style="color: #292929; text-decoration: none;">"${sub.title}"</a> by ${sub.author}</li>`).join("")}
+          ${args.followedSubmissions.map((sub) => `<li>â€?<a href="https://vibe.isllm.com/s/${sub.storySlug || sub.storyId}" style="color: #292929; text-decoration: none;">"${sub.title}"</a> by ${sub.author}</li>`).join("")}
         </ul>
       </div>
     `
@@ -354,11 +322,11 @@ export const generateEngagementEmail = internalQuery({
               <strong>${mention.authorName}</strong> mentioned you in a ${mention.context === "comment" ? "comment" : "judge note"} on "${mention.storyTitle}"
               <br><em style="color: #666; font-size: 12px;">"${mention.contentExcerpt.slice(0, 100)}${mention.contentExcerpt.length > 100 ? "..." : ""}"</em>
             </li>
-          `,
+          `
             )
             .join("")}
         </ul>
-        ${args.mentions.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibe.isllm.com/notifications" style="color: #292929;">View all ${args.mentions.length} mentions â†’</a></p>` : ""}
+        ${args.mentions.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibe.isllm.com/notifications" style="color: #292929;">View all ${args.mentions.length} mentions â†?/a></p>` : ""}
       </div>
     `
         : "";
@@ -377,11 +345,11 @@ export const generateEngagementEmail = internalQuery({
               <strong>${reply.replierName}</strong> replied on "${reply.storyTitle}"
               <br><em style="color: #666; font-size: 12px;">"${reply.contentExcerpt.slice(0, 100)}${reply.contentExcerpt.length > 100 ? "..." : ""}"</em>
             </li>
-          `,
+          `
             )
             .join("")}
         </ul>
-        ${args.replies.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibe.isllm.com/notifications" style="color: #292929;">View all ${args.replies.length} replies â†’</a></p>` : ""}
+        ${args.replies.length > 10 ? `<p style="text-align: center; margin: 10px 0;"><a href="https://vibe.isllm.com/notifications" style="color: #292929;">View all ${args.replies.length} replies â†?/a></p>` : ""}
       </div>
     `
         : "";
@@ -393,7 +361,7 @@ export const generateEngagementEmail = internalQuery({
         <h3 style="margin-top: 0; color: #292929;">Your post has been featured</h3>
         <ul style="list-style: none; padding: 0;">
           ${args.pinnedStories
-            .map((p) => `<li style="margin: 6px 0;">â€¢ ${p.storyTitle}</li>`)
+            .map((p) => `<li style="margin: 6px 0;">â€?${p.storyTitle}</li>`)
             .join("")}
         </ul>
       </div>
@@ -407,7 +375,7 @@ export const generateEngagementEmail = internalQuery({
         <h3 style="margin-top: 0; color: #292929;">Your post has a custom message from admin</h3>
         <ul style="list-style: none; padding: 0;">
           ${args.adminMessages
-            .map((m) => `<li style="margin: 6px 0;">â€¢ ${m.storyTitle}</li>`)
+            .map((m) => `<li style="margin: 6px 0;">â€?${m.storyTitle}</li>`)
             .join("")}
         </ul>
       </div>
@@ -426,12 +394,12 @@ export const generateEngagementEmail = internalQuery({
             <li style="margin: 8px 0; padding: 8px; background: #ffffff; border-radius: 4px;">
               <strong>${dm.senderName}</strong> sent you ${dm.messageCount} message${dm.messageCount !== 1 ? "s" : ""}
             </li>
-          `,
+          `
             )
             .join("")}
         </ul>
         <p style="margin: 10px 0;">
-          <a href="https://vibe.isllm.com/inbox" style="color: #292929; text-decoration: none; font-weight: 500;">View your inbox â†’</a>
+          <a href="https://vibe.isllm.com/inbox" style="color: #292929; text-decoration: none; font-weight: 500;">View your inbox â†?/a>
         </p>
       </div>
     `
@@ -470,26 +438,13 @@ export const generateEngagementEmail = internalQuery({
             ${inboxSection}
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/profile"}" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Your Profile</a>
+              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : "https://vibe.isllm.com/set-username"}" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Your Profile</a>
             </div>
 
             <p>Keep shipping amazing things!</p>
-            <p>VibeApps. </p>
+            <p>vibe.isllm.com. </p>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
-              
-              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
-                <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
-                <p style="margin: 5px 0;">You can manage which email notifications you receive and unsubscribe from your profile page.</p>
-                <p style="margin: 5px 0;">VibeApps is an <a href="https://github.com/waynesutton/vibeapps" style="color: #666;">open-source project</a>.</p>
-                <p style="margin: 5px 0;">Convex, 444 De Haro St Ste 218, San Francisco, CA 94107-2398 USA</p>
-                <p style="margin: 5px 0;">
-                  Follow us on <a href="https://twitter.com/convex_dev" style="color: #666;">Twitter</a> or <a href="https://www.linkedin.com/company/convex-dev/" style="color: #666;">LinkedIn</a>. 
-                  <a href="https://github.com/get-convex/convex-backend" style="color: #666;">Star on Github</a>
-                </p>
-              </div>
-            </div>
+            ${standardEmailFooter({ userId: args.userId, username: args.userUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -513,7 +468,7 @@ export const generateWeeklyDigest = internalQuery({
         storySlug: v.optional(v.string()),
         title: v.string(),
         vibes: v.number(),
-      }),
+      })
     ),
     unsubscribeToken: v.optional(v.string()),
   },
@@ -548,9 +503,9 @@ export const generateWeeklyDigest = internalQuery({
                   <li style="margin: 10px 0;">
                     <a href="https://vibe.isllm.com/s/${app.storySlug || app.storyId}" style="color: #292929; text-decoration: none;">
                       <strong>${app.title}</strong>
-                    </a> â€” ${app.vibes} vibes
+                    </a> â€?${app.vibes} vibes
                   </li>
-                `,
+                `
                   )
                   .join("")}
               </ol>
@@ -560,22 +515,9 @@ export const generateWeeklyDigest = internalQuery({
               <a href="https://vibe.isllm.com/leaderboard" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">View Weekly Leaderboard</a>
             </div>
 
-            <p>VibeApps</p>
+            <p>vibe.isllm.com</p>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
-              
-              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
-                <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
-                <p style="margin: 5px 0;">You can manage which email notifications you receive and unsubscribe from your profile page.</p>
-                <p style="margin: 5px 0;">VibeApps is an <a href="https://github.com/waynesutton/vibeapps" style="color: #666;">open-source project</a>.</p>
-                <p style="margin: 5px 0;">Convex, 444 De Haro St Ste 218, San Francisco, CA 94107-2398 USA</p>
-                <p style="margin: 5px 0;">
-                  Follow us on <a href="https://twitter.com/convex_dev" style="color: #666;">Twitter</a> or <a href="https://www.linkedin.com/company/convex-dev/" style="color: #666;">LinkedIn</a>. 
-                  <a href="https://github.com/get-convex/convex-backend" style="color: #666;">Star on Github</a>
-                </p>
-              </div>
-            </div>
+            ${standardEmailFooter({ userId: args.userId, username: args.userUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -627,23 +569,10 @@ export const generateBroadcastEmail = internalQuery({
               <a href="https://vibe.isllm.com" style="background: #292929; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Visit VibeApps</a>
             </div>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <p style="color: #666; font-size: 12px; margin: 0 0 10px 0;">
-                This message was sent by the VibeApps team to keep you updated on platform news and features.
-              </p>
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
-              
-              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
-                <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
-                <p style="margin: 5px 0;">You can manage which email notifications you receive and unsubscribe from your profile page.</p>
-                <p style="margin: 5px 0;">VibeApps is an <a href="https://github.com/waynesutton/vibeapps" style="color: #666;">open-source project</a>.</p>
-                <p style="margin: 5px 0;">Convex, 444 De Haro St Ste 218, San Francisco, CA 94107-2398 USA</p>
-                <p style="margin: 5px 0;">
-                  Follow us on <a href="https://twitter.com/convex_dev" style="color: #666;">Twitter</a> or <a href="https://www.linkedin.com/company/convex-dev/" style="color: #666;">LinkedIn</a>. 
-                  <a href="https://github.com/get-convex/convex-backend" style="color: #666;">Star on Github</a>
-                </p>
-              </div>
-            </div>
+            <p style="color: #666; font-size: 12px; margin: 0 0 10px 0; text-align: center;">
+              This message was sent by the VibeApps team to keep you updated on platform news and features.
+            </p>
+            ${standardEmailFooter({ userId: args.userId, username: args.userUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -699,20 +628,7 @@ export const generateMentionEmail = internalQuery({
 
             <p>- The VibeApps Team</p>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <a href="${args.userUsername ? `https://vibe.isllm.com/${args.userUsername}` : args.userId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666; font-size: 12px;">Manage email preferences</a>${args.unsubscribeToken ? ` | <a href="https://vibe.isllm.com/api/unsubscribe?token=${args.unsubscribeToken}" style="color: #666; font-size: 12px;">Unsubscribe</a>` : ""}
-              
-              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; font-size: 11px; color: #666; line-height: 1.4;">
-                <p style="margin: 5px 0;">If you have any questions, feedback, ideas or problems <a href="https://github.com/waynesutton/vibeapps/issues" style="color: #666;">contact us!</a></p>
-                <p style="margin: 5px 0;">You can manage which email notifications you receive and unsubscribe from your profile page.</p>
-                <p style="margin: 5px 0;">VibeApps is an <a href="https://github.com/waynesutton/vibeapps" style="color: #666;">open-source project</a>.</p>
-                <p style="margin: 5px 0;">Convex, 444 De Haro St Ste 218, San Francisco, CA 94107-2398 USA</p>
-                <p style="margin: 5px 0;">
-                  Follow us on <a href="https://twitter.com/convex_dev" style="color: #666;">Twitter</a> or <a href="https://www.linkedin.com/company/convex-dev/" style="color: #666;">LinkedIn</a>. 
-                  <a href="https://github.com/get-convex/convex-backend" style="color: #666;">Star on Github</a>
-                </p>
-              </div>
-            </div>
+            ${standardEmailFooter({ userId: args.userId, username: args.userUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -838,15 +754,11 @@ export const generateAdminUserReportEmail = internalQuery({
               </p>
             </div>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <p style="color: #666; font-size: 12px; margin: 5px 0;">
-                You received this email because you are an administrator at VibeApps.
-              </p>
-              <p style="color: #666; font-size: 12px; margin: 5px 0;">
-                <a href="${args.adminUsername ? `https://vibe.isllm.com/${args.adminUsername}` : args.adminUserId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666;">Manage email preferences</a> | 
-                <a href="https://vibe.isllm.com/admin" style="color: #666;">Admin Dashboard</a>
-              </p>
-            </div>
+            <p style="color: #666; font-size: 12px; margin: 5px 0; text-align: center;">
+              You received this email because you are an administrator at VibeApps.
+              <a href="https://vibe.isllm.com/admin" style="color: #666;">Admin Dashboard</a>
+            </p>
+            ${standardEmailFooter({ userId: args.adminUserId, username: args.adminUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>
@@ -944,15 +856,11 @@ export const generateReportNotificationEmail = internalQuery({
               </p>
             </div>
 
-            <div style="text-align: center; margin: 30px 0; padding: 20px; border-top: 1px solid #eee;">
-              <p style="color: #666; font-size: 12px; margin: 5px 0;">
-                You received this email because you are an administrator at VibeApps.
-              </p>
-              <p style="color: #666; font-size: 12px; margin: 5px 0;">
-                <a href="${args.adminUsername ? `https://vibe.isllm.com/${args.adminUsername}` : args.adminUserId ? "https://vibe.isllm.com/set-username" : "https://vibe.isllm.com/sign-in?redirect_url=" + encodeURIComponent("https://vibe.isllm.com/profile")}" style="color: #666;">Manage email preferences</a> | 
-                <a href="https://vibe.isllm.com/admin" style="color: #666;">Admin Dashboard</a>
-              </p>
-            </div>
+            <p style="color: #666; font-size: 12px; margin: 5px 0; text-align: center;">
+              You received this email because you are an administrator at VibeApps.
+              <a href="https://vibe.isllm.com/admin" style="color: #666;">Admin Dashboard</a>
+            </p>
+            ${standardEmailFooter({ userId: args.adminUserId, username: args.adminUsername, unsubscribeToken: args.unsubscribeToken })}
           </div>
         </body>
       </html>

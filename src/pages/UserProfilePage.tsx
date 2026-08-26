@@ -4,6 +4,7 @@ import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id, Doc } from "../../convex/_generated/dataModel";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
+import { authUrlWithReturn } from "../lib/redirectPath";
 import {
   ThumbsUp,
   MessageCircle,
@@ -33,11 +34,10 @@ import {
   Flag,
   Inbox,
   Send,
+  ChevronDown,
 } from "lucide-react";
 import type { Story } from "../types"; // Import the Story type
 import AlertDialog from "../components/ui/AlertDialog"; // Corrected path
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/500.css";
 import { NotFoundPage } from "./NotFoundPage"; // Added import for NotFoundPage
 import {
   Dialog,
@@ -49,6 +49,39 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useDialog } from "../hooks/useDialog";
+
+const PROFILE_SECTION_IDS = ["email-preferences", "manage-profile"] as const;
+type ProfileSectionId = (typeof PROFILE_SECTION_IDS)[number];
+
+function readProfileSection(
+  hash: string,
+  search: string,
+): ProfileSectionId | null {
+  const fromHash = hash.replace(/^#/, "");
+  if ((PROFILE_SECTION_IDS as readonly string[]).includes(fromHash)) {
+    return fromHash as ProfileSectionId;
+  }
+  const fromQuery = new URLSearchParams(search).get("section");
+  if (
+    fromQuery &&
+    (PROFILE_SECTION_IDS as readonly string[]).includes(fromQuery)
+  ) {
+    return fromQuery as ProfileSectionId;
+  }
+  return null;
+}
+
+// Small disclosure chevron: down when closed, flipped when open
+function ActivityTabChevron({ open }: { open: boolean }) {
+  return (
+    <ChevronDown
+      className={`h-3.5 w-3.5 shrink-0 transition-transform duration-150 ${
+        open ? "rotate-180 text-ink" : "text-faint"
+      }`}
+      aria-hidden="true"
+    />
+  );
+}
 
 // Placeholder for loading and error states
 const Loading = () => <div className="text-center p-8"> </div>;
@@ -133,7 +166,11 @@ type FollowUserListItem = {
 export default function UserProfilePage() {
   const { username } = useParams<{ username: string }>();
   const location = useLocation(); // Get location object for query params
-  const { user: authUser, isLoaded: isClerkLoaded } = useUser();
+  const {
+    user: authUser,
+    isLoaded: isClerkLoaded,
+    isSignedIn,
+  } = useUser();
   const { signOut } = useClerk();
   const navigate = useNavigate();
   const { showMessage, DialogComponents } = useDialog();
@@ -188,6 +225,10 @@ export default function UserProfilePage() {
   const emailSettingsData = useQuery(
     api.emailSettings.getEmailSettings,
     isOwnProfileCandidate ? {} : "skip",
+  );
+  const myUser = useQuery(
+    api.users.getMyUserDocument,
+    isClerkLoaded && isSignedIn ? {} : "skip",
   );
   const updateEmailSettingsMutation = useMutation(
     api.emailSettings.updateEmailSettings,
@@ -277,7 +318,7 @@ export default function UserProfilePage() {
   const [newTwitter, setNewTwitter] = useState("");
   const [newBluesky, setNewBluesky] = useState("");
   const [newLinkedin, setNewLinkedin] = useState("");
-  const [activeTab, setActiveTab] = useState<string>("votes");
+  const [activeTab, setActiveTab] = useState<string | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isLoadingFollowAction, setIsLoadingFollowAction] = useState(false);
@@ -337,6 +378,7 @@ export default function UserProfilePage() {
     // ensuring the content is visible after a mini-dashboard click or direct tab click.
     if (
       tabContentAreaRef.current &&
+      activeTab !== null &&
       [
         "votes",
         "ratings",
@@ -353,6 +395,54 @@ export default function UserProfilePage() {
     }
   }, [activeTab]);
 
+  // Email footers and the header shortcut land on #email-preferences or
+  // #manage-profile. Clerk can drop hashes on return, so ?section= is the
+  // sign-in fallback. Signed-out visitors go through sign-in; signed-in
+  // visitors on someone else's profile go to their own username.
+  useEffect(() => {
+    if (!username) return;
+    const section = readProfileSection(location.hash, location.search);
+    if (!section) return;
+    if (!isClerkLoaded) return;
+
+    const returnPath = `/${username}?section=${section}`;
+
+    if (!isSignedIn) {
+      navigate(authUrlWithReturn("/sign-in", returnPath), { replace: true });
+      return;
+    }
+
+    if (myUser === undefined) return;
+    if (myUser?.username && myUser.username.toLowerCase() !== username.toLowerCase()) {
+      navigate(`/${myUser.username}?section=${section}`, { replace: true });
+      return;
+    }
+
+    if (profileData?.isOwnProfile !== true) return;
+
+    const el = document.getElementById(section);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    if (location.search.includes("section=")) {
+      navigate(
+        { pathname: location.pathname, hash: `#${section}`, search: "" },
+        { replace: true },
+      );
+    }
+  }, [
+    username,
+    location.hash,
+    location.search,
+    location.pathname,
+    isClerkLoaded,
+    isSignedIn,
+    myUser,
+    profileData?.isOwnProfile,
+    emailSettingsData,
+    navigate,
+  ]);
+
   const handleMiniDashboardClick = (targetTabOrSection: string) => {
     if (targetTabOrSection === "submissions") {
       submissionsSectionRef.current?.scrollIntoView({
@@ -360,9 +450,13 @@ export default function UserProfilePage() {
         block: "start",
       });
     } else {
-      // Set the active tab, the useEffect above will handle scrolling.
+      // Mini cards always open the matching list.
       setActiveTab(targetTabOrSection);
     }
+  };
+
+  const toggleActivityTab = (tab: string) => {
+    setActiveTab((current) => (current === tab ? null : tab));
   };
 
   // Handle /user-settings route for Clerk's UserProfile component
@@ -957,7 +1051,7 @@ export default function UserProfilePage() {
       <div className="max-w-4xl mx-auto p-4 sm:p-6 from-slate-50 to-gray-100 min-h-screen">
         <header
           className="mb-4 p-6 bg-surface rounded-lg border border-hairline"
-          style={{ fontFamily: "Inter, sans-serif" }}
+          style={{ fontFamily: "var(--th-font-sans)" }}
         >
           <div className="flex flex-col sm:flex-row items-start sm:items-start">
             {/* Profile Image Section */}
@@ -1015,13 +1109,13 @@ export default function UserProfilePage() {
                     onChange={(e) => setNewName(e.target.value)}
                     className="text-xl font-normal text-ink w-full px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                     placeholder="Display Name"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   />
                   {/* Username Input */}
                   {/* <div className="flex items-center">
                   <span
                     className="text-lg text-soft mr-1"
-                    style={{ fontFamily: "Inter, sans-serif" }}>
+                    style={{ fontFamily: "var(--th-font-sans)" }}>
                     @
                   </span>
                   <input
@@ -1030,7 +1124,7 @@ export default function UserProfilePage() {
                     onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
                     className="text-lg text-soft w-full px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                     placeholder="username"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   />
                 </div> */}
                 </div>
@@ -1038,7 +1132,7 @@ export default function UserProfilePage() {
                 <div className="flex items-baseline mb-1">
                   <h1
                     className="text-lg font-normal text-ink mr-2"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   >
                     {loadedProfileUser?.name || "Anonymous User"}
                     {!isEditing && loadedProfileUser?.isVerified && (
@@ -1047,7 +1141,7 @@ export default function UserProfilePage() {
                   </h1>
                   <p
                     className="text-lg text-copy"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   >
                     {/* @{loadedProfileUser?.username || "N/A"}{" "} */}
                     {typeof userNumber === "number" && (
@@ -1068,20 +1162,20 @@ export default function UserProfilePage() {
                     maxLength={200}
                     className="w-full px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                     placeholder="Add a short bio (max 200 chars)"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                     rows={3}
                   />
                 ) : loadedProfileUser?.bio ? (
                   <p
                     className="text-sm text-copy w-full text-left"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   >
                     {loadedProfileUser.bio}
                   </p>
                 ) : (
                   <p
                     className="text-sm text-faint italic w-full text-left"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   >
                     No bio yet.
                   </p>
@@ -1098,7 +1192,7 @@ export default function UserProfilePage() {
                       onChange={(e) => setNewWebsite(e.target.value)}
                       className="flex-grow sm:w-auto px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                       placeholder="Website"
-                      style={{ fontFamily: "Inter, sans-serif" }}
+                      style={{ fontFamily: "var(--th-font-sans)" }}
                     />
                     <input
                       type="url"
@@ -1106,7 +1200,7 @@ export default function UserProfilePage() {
                       onChange={(e) => setNewTwitter(e.target.value)}
                       className="flex-grow sm:w-auto px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                       placeholder="Twitter"
-                      style={{ fontFamily: "Inter, sans-serif" }}
+                      style={{ fontFamily: "var(--th-font-sans)" }}
                     />
                     <input
                       type="url"
@@ -1114,7 +1208,7 @@ export default function UserProfilePage() {
                       onChange={(e) => setNewBluesky(e.target.value)}
                       className="flex-grow sm:w-auto px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                       placeholder="Bluesky"
-                      style={{ fontFamily: "Inter, sans-serif" }}
+                      style={{ fontFamily: "var(--th-font-sans)" }}
                     />
                     <input
                       type="url"
@@ -1122,7 +1216,7 @@ export default function UserProfilePage() {
                       onChange={(e) => setNewLinkedin(e.target.value)}
                       className="flex-grow  sm:w-auto px-2 py-1 border border-hairline-strong rounded-md text-sm focus:outline-none focus:border-ink"
                       placeholder="LinkedIn"
-                      style={{ fontFamily: "Inter, sans-serif" }}
+                      style={{ fontFamily: "var(--th-font-sans)" }}
                     />
                   </>
                 ) : (
@@ -1188,7 +1282,7 @@ export default function UserProfilePage() {
                         ? "bg-surface-hover text-copy hover:bg-surface-hover"
                         : "bg-cta text-on-cta hover:bg-cta-hover"
                     }`}
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   >
                     {isLoadingFollowAction ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-surface mr-2"></div>
@@ -1219,7 +1313,7 @@ export default function UserProfilePage() {
                         ? "bg-surface-hover text-soft cursor-not-allowed"
                         : "bg-cta text-on-cta hover:bg-cta-hover"
                     }`}
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                     title={
                       recipientInboxEnabled === false
                         ? "This user's inbox is disabled"
@@ -1245,19 +1339,19 @@ export default function UserProfilePage() {
                       ownInboxEnabled !== false && navigate("/inbox")
                     }
                     disabled={ownInboxEnabled === false}
-                    className={`px-6 py-2 rounded-md border border-hairline text-sm font-medium flex items-center justify-center transition-colors ${
+                    className={`h-8 px-3 rounded-md border border-hairline text-xs font-medium inline-flex items-center justify-center whitespace-nowrap shrink-0 transition-colors ${
                       ownInboxEnabled === false
                         ? "bg-surface-hover text-soft cursor-not-allowed"
                         : "bg-cta text-on-cta hover:bg-surface-hover hover:text-ink"
                     }`}
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                     title={
                       ownInboxEnabled === false
                         ? "Enable your inbox to access messages"
                         : "View your inbox"
                     }
                   >
-                    <Inbox className="w-4 h-4 mr-2 text-md" />
+                    <Inbox className="w-3.5 h-3.5 mr-1.5" />
                     Inbox
                   </button>
 
@@ -1296,14 +1390,22 @@ export default function UserProfilePage() {
                     </span>
                   </div>
 
-                  {/* Edit Profile Button */}
+                  {/* Compact one-line CTAs next to Inbox */}
                   <button
                     onClick={handleEditToggle}
-                    className="px-6 py-2 rounded-md bg-cta border border-hairline text-on-cta text-sm font-medium hover:bg-surface-hover hover:text-ink flex items-center justify-center transition-colors"
-                    style={{ fontFamily: "Inter, sans-serif" }}
+                    className="h-8 px-3 rounded-md bg-cta border border-hairline text-on-cta text-xs font-medium hover:bg-surface-hover hover:text-ink inline-flex items-center justify-center whitespace-nowrap shrink-0 transition-colors"
+                    style={{ fontFamily: "var(--th-font-sans)" }}
                   >
-                    <Edit3 className="w-4 h-4 mr-2 text-md" /> Edit my profile
+                    <Edit3 className="w-3.5 h-3.5 mr-1.5" /> Edit my profile
                   </button>
+                  <a
+                    href="#manage-profile"
+                    className="h-8 px-3 rounded-md bg-cta border border-hairline text-on-cta text-xs font-medium hover:bg-surface-hover hover:text-ink inline-flex items-center justify-center whitespace-nowrap shrink-0 transition-colors"
+                    style={{ fontFamily: "var(--th-font-sans)" }}
+                  >
+                    <Settings className="w-3.5 h-3.5 mr-1.5" /> Manage Account
+                    & Email
+                  </a>
                 </div>
               )}
             </div>
@@ -1314,7 +1416,7 @@ export default function UserProfilePage() {
               {editError && (
                 <p
                   className="text-sm text-red-500 w-full sm:w-auto text-center sm:text-left"
-                  style={{ fontFamily: "Inter, sans-serif" }}
+                  style={{ fontFamily: "var(--th-font-sans)" }}
                 >
                   {editError}
                 </p>
@@ -1323,7 +1425,7 @@ export default function UserProfilePage() {
                 onClick={handleEditToggle} // This is cancel
                 disabled={isSaving}
                 className="px-4 py-2 bg-surface-hover text-copy rounded-md hover:bg-surface-hover transition-colors flex items-center justify-center"
-                style={{ fontFamily: "Inter, sans-serif" }}
+                style={{ fontFamily: "var(--th-font-sans)" }}
               >
                 <XCircle className="w-4 h-4 mr-2" /> Cancel
               </button>
@@ -1340,7 +1442,7 @@ export default function UserProfilePage() {
                     newLinkedin === (loadedProfileUser?.linkedin || ""))
                 }
                 className="px-4 py-2 bg-cta text-on-cta rounded-md hover:bg-cta-hover transition-colors flex items-center justify-center disabled:opacity-50"
-                style={{ fontFamily: "Inter, sans-serif" }}
+                style={{ fontFamily: "var(--th-font-sans)" }}
               >
                 <Save className="w-4 h-4 mr-2" />{" "}
                 {isSaving ? "Saving..." : "Save Changes"}
@@ -1352,7 +1454,7 @@ export default function UserProfilePage() {
         {/* Mini Dashboard Section */}
         <section
           className="mb-4 p-4 rounded-md border bg-surface border-hairline"
-          style={{ fontFamily: "Inter, sans-serif" }}
+          style={{ fontFamily: "var(--th-font-sans)" }}
         >
           <h2 className="text-lg font-normal text-ink mb-4 pb-2 border-b border-hairline-strong">
             My Vibes
@@ -1521,14 +1623,14 @@ export default function UserProfilePage() {
                   <div className="flex-grow mr-4">
                     <Link
                       to={`/s/${story.slug}`}
-                      className="text-lg font-semibold text-ink hover:underline"
+                      className="app-title text-ink hover:underline"
                     >
                       {story.title}
                     </Link>
-                    <p className="text-sm text-copy whitespace-normal break-words">
+                    <p className="app-desc text-copy whitespace-normal break-words mt-1">
                       {story.description}
                     </p>
-                    <p className="text-xs text-soft">
+                    <p className="text-[13px] text-soft mt-1">
                       Submitted by:{" "}
                       {story.authorName || story.authorUsername || "Anonymous"}
                       {story.authorIsVerified && <VerifiedBadge />}
@@ -1561,74 +1663,104 @@ export default function UserProfilePage() {
           {/* Tab Buttons */}
           <div className="flex flex-col gap-2 md:flex-row md:flex-wrap border-b border-hairline-strong mb-4">
             <button
-              onClick={() => setActiveTab("votes")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none ${
+              type="button"
+              onClick={() => toggleActivityTab("votes")}
+              aria-expanded={activeTab === "votes"}
+              aria-controls="tab-section-votes"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "votes"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
               Votes ({votes?.length ?? 0})
+              <ActivityTabChevron open={activeTab === "votes"} />
             </button>
             <button
-              onClick={() => setActiveTab("ratings")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none ${
+              type="button"
+              onClick={() => toggleActivityTab("ratings")}
+              aria-expanded={activeTab === "ratings"}
+              aria-controls="tab-section-ratings"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "ratings"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
               Ratings Given ({ratings?.length ?? 0})
+              <ActivityTabChevron open={activeTab === "ratings"} />
             </button>
             <button
-              onClick={() => setActiveTab("comments")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none ${
+              type="button"
+              onClick={() => toggleActivityTab("comments")}
+              aria-expanded={activeTab === "comments"}
+              aria-controls="tab-section-comments"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "comments"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
               Comments ({comments?.length ?? 0})
+              <ActivityTabChevron open={activeTab === "comments"} />
             </button>
             {isOwnProfile && (
               <button
-                onClick={() => setActiveTab("bookmarks")}
-                className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none flex items-center ${
+                type="button"
+                onClick={() => toggleActivityTab("bookmarks")}
+                aria-expanded={activeTab === "bookmarks"}
+                aria-controls="tab-section-bookmarks"
+                className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                   activeTab === "bookmarks"
                     ? "border-b-2 border-ink text-ink"
                     : "text-soft hover:text-copy hover:border-hairline-strong"
                 }`}
                 title="Bookmarks are private"
               >
-                <BookKey className="w-4 h-4 mr-1" />
-                {isOwnProfile
-                  ? `Bookmarks (${userBookmarksCount ?? 0})`
-                  : "Bookmarks"}
+                <span className="inline-flex items-center">
+                  <BookKey className="w-4 h-4 mr-1" />
+                  {isOwnProfile
+                    ? `Bookmarks (${userBookmarksCount ?? 0})`
+                    : "Bookmarks"}
+                </span>
+                <ActivityTabChevron open={activeTab === "bookmarks"} />
               </button>
             )}
             {/* Followers Tab Button */}
             <button
-              onClick={() => setActiveTab("followers")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none flex items-center ${
+              type="button"
+              onClick={() => toggleActivityTab("followers")}
+              aria-expanded={activeTab === "followers"}
+              aria-controls="tab-section-followers"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "followers"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
-              <Users className="w-4 h-4 mr-1" /> Followers (
-              {followersCount ?? 0})
+              <span className="inline-flex items-center">
+                <Users className="w-4 h-4 mr-1" /> Followers (
+                {followersCount ?? 0})
+              </span>
+              <ActivityTabChevron open={activeTab === "followers"} />
             </button>
             {/* Following Tab Button */}
             <button
-              onClick={() => setActiveTab("following")}
-              className={`w-full text-left md:w-auto py-2 px-4 text-sm font-medium focus:outline-none flex items-center ${
+              type="button"
+              onClick={() => toggleActivityTab("following")}
+              aria-expanded={activeTab === "following"}
+              aria-controls="tab-section-following"
+              className={`w-full md:w-auto py-2 px-4 text-sm font-medium focus:outline-none inline-flex items-center justify-between gap-1.5 ${
                 activeTab === "following"
                   ? "border-b-2 border-ink text-ink"
                   : "text-soft hover:text-copy hover:border-hairline-strong"
               }`}
             >
-              <Users className="w-4 h-4 mr-1" /> Following (
-              {followingCount ?? 0})
+              <span className="inline-flex items-center">
+                <Users className="w-4 h-4 mr-1" /> Following (
+                {followingCount ?? 0})
+              </span>
+              <ActivityTabChevron open={activeTab === "following"} />
             </button>
           </div>
 
@@ -1656,11 +1788,11 @@ export default function UserProfilePage() {
                         <div className="flex-grow mr-4">
                           <Link
                             to={`/s/${vote.storySlug}`}
-                            className="text-lg font-semibold text-ink hover:underline"
+                            className="app-title text-ink hover:underline"
                           >
                             {vote.storyTitle || "View Story"}
                           </Link>
-                          <p className="text-xs text-faint">
+                          <p className="text-[13px] text-faint mt-1">
                             Voted on:{" "}
                             {new Date(vote._creationTime).toLocaleDateString()}
                           </p>
@@ -1699,7 +1831,7 @@ export default function UserProfilePage() {
                         <div className="flex-grow mr-4">
                           <Link
                             to={`/s/${rating.storySlug}`}
-                            className="text-lg font-semibold text-ink hover:underline"
+                            className="app-title text-ink hover:underline"
                           >
                             {rating.storyTitle || "View Story"}
                           </Link>
@@ -1814,16 +1946,16 @@ export default function UserProfilePage() {
                             <div className="flex-grow mr-4">
                               <Link
                                 to={`/s/${bookmark.storySlug}`}
-                                className="text-lg font-semibold text-ink hover:underline"
+                                className="app-title text-ink hover:underline"
                               >
                                 {bookmark.storyTitle || "View Story"}
                               </Link>
                               {bookmark.storyDescription && (
-                                <p className="text-sm text-copy whitespace-normal break-words mt-1">
+                                <p className="app-desc text-copy whitespace-normal break-words mt-1">
                                   {bookmark.storyDescription}
                                 </p>
                               )}
-                              <p className="text-xs text-faint mt-1">
+                              <p className="text-[13px] text-faint mt-1">
                                 Bookmarked on:{" "}
                                 {new Date(
                                   bookmark._creationTime,
@@ -1967,11 +2099,11 @@ export default function UserProfilePage() {
         {isOwnProfile && (
           <section
             id="manage-profile"
-            className="mb-4 p-6 bg-surface rounded-lg border border-hairline"
-            style={{ fontFamily: "Inter, sans-serif" }}
+            className="mb-4 p-6 bg-surface rounded-lg border border-hairline scroll-mt-24"
+            style={{ fontFamily: "var(--th-font-sans)" }}
           >
             <h2 className="text-lg font-normal text-ink mb-6 pb-3 border-b border-hairline-strong">
-              Manage Profile & Account
+              Manage Profile, Account & Email Preferences
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Column 1: Profile Settings and General Account Management */}
@@ -2005,7 +2137,10 @@ export default function UserProfilePage() {
                     etc.)
                   </Link>
                   {/* Email Preferences */}
-                  <div className="mt-4 p-4 bg-surface border border-hairline rounded-md">
+                  <div
+                    id="email-preferences"
+                    className="mt-4 p-4 bg-surface border border-hairline rounded-md scroll-mt-24"
+                  >
                     <div className="flex items-center justify-between mb-3">
                       <div>
                         <h4 className="text-sm font-medium text-ink">

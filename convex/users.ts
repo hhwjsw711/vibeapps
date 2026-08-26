@@ -306,11 +306,33 @@ export const getMyUserDocument = query({
     if (!identity) {
       return null;
     }
+    // first() not unique(): webhook + ensureUser can insert two rows for one clerkId
     const user = await ctx.db
       .query("users")
-      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject)) // Ensured correct index name
-      .unique();
-    return user;
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .first();
+    if (!user) {
+      return null;
+    }
+    // Pick validator fields only. Raw docs fail when extra schema fields exist
+    // (nameCustomized, emojiTheme, isBanned, isPaused).
+    return {
+      _id: user._id,
+      _creationTime: user._creationTime,
+      clerkId: user.clerkId,
+      email: user.email ?? undefined,
+      name: user.name,
+      username: user.username ?? undefined,
+      imageUrl: user.imageUrl ?? undefined,
+      role: user.role ?? undefined,
+      bio: user.bio ?? undefined,
+      website: user.website ?? undefined,
+      twitter: user.twitter ?? undefined,
+      bluesky: user.bluesky ?? undefined,
+      linkedin: user.linkedin ?? undefined,
+      isVerified: user.isVerified ?? undefined,
+      inboxEnabled: user.inboxEnabled ?? undefined,
+    };
   },
 });
 

@@ -48,4 +48,12 @@ crons.cron(
   {},
 );
 
+// Refresh listed Luma event titles, dates, and covers. Does not import the calendar.
+crons.interval(
+  "sync luma calendar events",
+  { hours: 1 },
+  internal.luma.syncFromApi,
+  {},
+);
+
 export default crons;
