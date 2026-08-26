@@ -51,6 +51,7 @@ export const searchUsers = query({
       _id: v.id("users"),
       name: v.optional(v.string()),
       email: v.string(),
+      unsubscribed: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -78,13 +79,41 @@ export const searchUsers = query({
       })
       .slice(0, 10); // Limit to 10 results
 
-    return matchingUsers.map((user) => ({
-      _id: user._id,
-      name: user.name,
-      email: user.email!,
-    }));
+    // Flag anyone who opted out of all emails so the picker can block them.
+    // Only runs for the (max 10) matches, so the lookups stay cheap.
+    const results = await Promise.all(
+      matchingUsers.map(async (user) => {
+        const settings = await ctx.db
+          .query("emailSettings")
+          .withIndex("by_user", (q) => q.eq("userId", user._id))
+          .unique();
+        return {
+          _id: user._id,
+          name: user.name,
+          email: user.email!,
+          unsubscribed: !!settings?.unsubscribedAt,
+        };
+      }),
+    );
+    return results;
   },
 });
+
+/**
+ * Validate an optional schedule timestamp. Returns the timestamp when the
+ * broadcast should be delayed, or null for an immediate send.
+ */
+function resolveScheduledAt(scheduledAtMs: number | undefined): number | null {
+  if (scheduledAtMs === undefined) return null;
+  if (!Number.isFinite(scheduledAtMs)) {
+    throw new Error("Invalid schedule time");
+  }
+  // Allow a small clock-skew grace window, otherwise require a future time
+  if (scheduledAtMs < Date.now() - 60 * 1000) {
+    throw new Error("Schedule time must be in the future");
+  }
+  return scheduledAtMs;
+}
 
 /**
  * Send broadcast email to selected users
@@ -94,6 +123,7 @@ export const sendBroadcastToSelected = mutation({
     subject: v.string(),
     htmlContent: v.string(),
     userIds: v.array(v.id("users")),
+    scheduledAtMs: v.optional(v.number()),
   },
   returns: v.object({
     success: v.boolean(),
@@ -117,6 +147,40 @@ export const sendBroadcastToSelected = mutation({
 
     if (!user) {
       throw new Error("User not found");
+    }
+
+    const scheduledAt = resolveScheduledAt(args.scheduledAtMs);
+
+    if (scheduledAt !== null) {
+      // Create a queued record now so the schedule is visible and cancellable
+      const broadcastId = await ctx.db.insert("broadcastEmails", {
+        createdBy: user._id,
+        subject: args.subject,
+        html: args.htmlContent,
+        status: "queued",
+        totalRecipients: args.userIds.length,
+        sentCount: 0,
+        scheduledAt,
+        recipientSummary: `${args.userIds.length} selected user${args.userIds.length !== 1 ? "s" : ""}`,
+      });
+      const scheduledFunctionId = await ctx.scheduler.runAt(
+        scheduledAt,
+        internal.emails.broadcast.sendBroadcastToSelectedUsers,
+        {
+          subject: args.subject,
+          htmlContent: args.htmlContent,
+          userIds: args.userIds,
+          adminUserId: user._id,
+          broadcastId,
+        },
+      );
+      await ctx.db.patch(broadcastId, { scheduledFunctionId });
+      return {
+        success: true,
+        totalRecipients: args.userIds.length,
+        successCount: 0,
+        failureCount: 0,
+      };
     }
 
     // Schedule the broadcast email sending via scheduler
@@ -148,6 +212,7 @@ export const sendBroadcast = mutation({
   args: {
     subject: v.string(),
     htmlContent: v.string(),
+    scheduledAtMs: v.optional(v.number()),
   },
   returns: v.object({
     success: v.boolean(),
@@ -171,6 +236,38 @@ export const sendBroadcast = mutation({
 
     if (!user) {
       throw new Error("User not found");
+    }
+
+    const scheduledAt = resolveScheduledAt(args.scheduledAtMs);
+
+    if (scheduledAt !== null) {
+      // Create a queued record now so the schedule is visible and cancellable
+      const broadcastId = await ctx.db.insert("broadcastEmails", {
+        createdBy: user._id,
+        subject: args.subject,
+        html: args.htmlContent,
+        status: "queued",
+        sentCount: 0,
+        scheduledAt,
+        recipientSummary: "All subscribed users",
+      });
+      const scheduledFunctionId = await ctx.scheduler.runAt(
+        scheduledAt,
+        internal.emails.broadcast.sendBroadcastEmail,
+        {
+          subject: args.subject,
+          htmlContent: args.htmlContent,
+          adminUserId: user._id,
+          broadcastId,
+        },
+      );
+      await ctx.db.patch(broadcastId, { scheduledFunctionId });
+      return {
+        success: true,
+        totalRecipients: 0,
+        successCount: 0,
+        failureCount: 0,
+      };
     }
 
     // Schedule the broadcast email sending via scheduler (mutations can't call actions directly)
@@ -306,6 +403,7 @@ export const sendBroadcastToTag = mutation({
     htmlContent: v.string(),
     tagId: v.id("tags"),
     statuses: v.optional(tagStatusValidator),
+    scheduledAtMs: v.optional(v.number()),
   },
   returns: v.object({
     success: v.boolean(),
@@ -327,6 +425,43 @@ export const sendBroadcastToTag = mutation({
       .unique();
     if (!user) {
       throw new Error("User not found");
+    }
+
+    const scheduledAt = resolveScheduledAt(args.scheduledAtMs);
+
+    if (scheduledAt !== null) {
+      // Create a queued record now so the schedule is visible and cancellable
+      const tag = await ctx.db.get(args.tagId);
+      const broadcastId = await ctx.db.insert("broadcastEmails", {
+        createdBy: user._id,
+        subject: args.subject,
+        html: args.htmlContent,
+        status: "queued",
+        sentCount: 0,
+        scheduledAt,
+        recipientSummary: tag
+          ? `Users tagged "${tag.name}"`
+          : "Users with tag",
+      });
+      const scheduledFunctionId = await ctx.scheduler.runAt(
+        scheduledAt,
+        internal.emails.broadcast.sendBroadcastToTagUsers,
+        {
+          subject: args.subject,
+          htmlContent: args.htmlContent,
+          tagId: args.tagId,
+          statuses: args.statuses,
+          adminUserId: user._id,
+          broadcastId,
+        },
+      );
+      await ctx.db.patch(broadcastId, { scheduledFunctionId });
+      return {
+        success: true,
+        totalRecipients: 0,
+        successCount: 0,
+        failureCount: 0,
+      };
     }
 
     // Schedule the send (mutations can't call actions directly)
@@ -361,6 +496,7 @@ export const sendBroadcastToTagUsers = internalAction({
     tagId: v.id("tags"),
     statuses: v.optional(tagStatusValidator),
     adminUserId: v.id("users"),
+    broadcastId: v.optional(v.id("broadcastEmails")),
   },
   returns: v.object({
     success: v.boolean(),
@@ -379,6 +515,14 @@ export const sendBroadcastToTagUsers = internalAction({
     });
 
     if (users.length === 0) {
+      // Close out a scheduled record even when nobody matches at send time
+      if (args.broadcastId) {
+        await ctx.runMutation(internal.emails.broadcast.updateBroadcastRecord, {
+          broadcastId: args.broadcastId,
+          sentCount: 0,
+          status: "completed",
+        });
+      }
       return {
         success: true,
         totalRecipients: 0,
@@ -387,16 +531,21 @@ export const sendBroadcastToTagUsers = internalAction({
       };
     }
 
-    // Create broadcast record for tracking
-    const broadcastId: any = await ctx.runMutation(
-      internal.emails.broadcast.createBroadcastRecord,
-      {
+    // Reuse the queued record from a scheduled send, or create one now
+    const broadcastId: Id<"broadcastEmails"> =
+      args.broadcastId ??
+      (await ctx.runMutation(internal.emails.broadcast.createBroadcastRecord, {
         createdBy: args.adminUserId,
         subject: args.subject,
         html: args.htmlContent,
         totalRecipients: users.length,
-      },
-    );
+      }));
+    if (args.broadcastId) {
+      await ctx.runMutation(internal.emails.broadcast.markBroadcastSending, {
+        broadcastId,
+        totalRecipients: users.length,
+      });
+    }
 
     let successCount = 0;
     let failureCount = 0;
@@ -522,11 +671,8 @@ export const getEmailSubscribedUsers = internalQuery({
     }),
   ),
   handler: async (ctx) => {
-    // Get all users with email addresses
-    const users = await ctx.db
-      .query("users")
-      .filter((q) => q.neq(q.field("email"), undefined))
-      .collect();
+    // Get all users; the loop below skips anyone without an email address
+    const users = await ctx.db.query("users").collect();
 
     // Filter out users who have unsubscribed from all emails
     const subscribedUsers = [];
@@ -563,6 +709,7 @@ export const sendBroadcastToSelectedUsers = internalAction({
     htmlContent: v.string(),
     userIds: v.array(v.id("users")),
     adminUserId: v.id("users"),
+    broadcastId: v.optional(v.id("broadcastEmails")),
   },
   returns: v.object({
     success: v.boolean(),
@@ -597,6 +744,14 @@ export const sendBroadcastToSelectedUsers = internalAction({
     }
 
     if (users.length === 0) {
+      // Close out a scheduled record even when nobody matches at send time
+      if (args.broadcastId) {
+        await ctx.runMutation(internal.emails.broadcast.updateBroadcastRecord, {
+          broadcastId: args.broadcastId,
+          sentCount: 0,
+          status: "completed",
+        });
+      }
       return {
         success: true,
         totalRecipients: 0,
@@ -605,16 +760,21 @@ export const sendBroadcastToSelectedUsers = internalAction({
       };
     }
 
-    // Create broadcast record
-    const broadcastId: any = await ctx.runMutation(
-      internal.emails.broadcast.createBroadcastRecord,
-      {
+    // Reuse the queued record from a scheduled send, or create one now
+    const broadcastId: Id<"broadcastEmails"> =
+      args.broadcastId ??
+      (await ctx.runMutation(internal.emails.broadcast.createBroadcastRecord, {
         createdBy: args.adminUserId,
         subject: args.subject,
         html: args.htmlContent,
         totalRecipients: users.length,
-      },
-    );
+      }));
+    if (args.broadcastId) {
+      await ctx.runMutation(internal.emails.broadcast.markBroadcastSending, {
+        broadcastId,
+        totalRecipients: users.length,
+      });
+    }
 
     let successCount = 0;
     let failureCount = 0;
@@ -711,6 +871,7 @@ export const sendBroadcastEmail = internalAction({
     subject: v.string(),
     htmlContent: v.string(),
     adminUserId: v.id("users"),
+    broadcastId: v.optional(v.id("broadcastEmails")),
   },
   returns: v.object({
     success: v.boolean(),
@@ -730,6 +891,14 @@ export const sendBroadcastEmail = internalAction({
     );
 
     if (users.length === 0) {
+      // Close out a scheduled record even when nobody matches at send time
+      if (args.broadcastId) {
+        await ctx.runMutation(internal.emails.broadcast.updateBroadcastRecord, {
+          broadcastId: args.broadcastId,
+          sentCount: 0,
+          status: "completed",
+        });
+      }
       return {
         success: true,
         totalRecipients: 0,
@@ -738,16 +907,21 @@ export const sendBroadcastEmail = internalAction({
       };
     }
 
-    // Create broadcast record
-    const broadcastId: any = await ctx.runMutation(
-      internal.emails.broadcast.createBroadcastRecord,
-      {
+    // Reuse the queued record from a scheduled send, or create one now
+    const broadcastId: Id<"broadcastEmails"> =
+      args.broadcastId ??
+      (await ctx.runMutation(internal.emails.broadcast.createBroadcastRecord, {
         createdBy: args.adminUserId,
         subject: args.subject,
         html: args.htmlContent,
         totalRecipients: users.length,
-      },
-    );
+      }));
+    if (args.broadcastId) {
+      await ctx.runMutation(internal.emails.broadcast.markBroadcastSending, {
+        broadcastId,
+        totalRecipients: users.length,
+      });
+    }
 
     let successCount = 0;
     let failureCount = 0;
@@ -881,5 +1055,86 @@ export const updateBroadcastRecord = internalMutation({
       status: args.status,
     });
     return null;
+  },
+});
+
+/**
+ * Mark a queued (scheduled) broadcast as sending with the final recipient count
+ */
+export const markBroadcastSending = internalMutation({
+  args: {
+    broadcastId: v.id("broadcastEmails"),
+    totalRecipients: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.broadcastId, {
+      status: "sending",
+      totalRecipients: args.totalRecipients,
+    });
+    return null;
+  },
+});
+
+/**
+ * List queued (scheduled) broadcasts for the admin dashboard, soonest first
+ */
+export const listScheduledBroadcasts = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("broadcastEmails"),
+      _creationTime: v.number(),
+      subject: v.string(),
+      scheduledAt: v.optional(v.number()),
+      recipientSummary: v.optional(v.string()),
+    }),
+  ),
+  handler: async (ctx) => {
+    await requirePermission(ctx, "emails.send");
+
+    const queued = await ctx.db
+      .query("broadcastEmails")
+      .withIndex("by_status", (q) => q.eq("status", "queued"))
+      .collect();
+
+    return queued
+      .sort((a, b) => (a.scheduledAt ?? 0) - (b.scheduledAt ?? 0))
+      .map((b) => ({
+        _id: b._id,
+        _creationTime: b._creationTime,
+        subject: b.subject,
+        scheduledAt: b.scheduledAt,
+        recipientSummary: b.recipientSummary,
+      }));
+  },
+});
+
+/**
+ * Cancel a scheduled broadcast before it sends. Idempotent: if the job has
+ * already started (status is no longer queued) this is a no-op.
+ */
+export const cancelScheduledBroadcast = mutation({
+  args: {
+    broadcastId: v.id("broadcastEmails"),
+  },
+  returns: v.object({ cancelled: v.boolean() }),
+  handler: async (ctx, args) => {
+    await requirePermission(ctx, "emails.send");
+
+    const broadcast = await ctx.db.get(args.broadcastId);
+    if (!broadcast || broadcast.status !== "queued") {
+      return { cancelled: false };
+    }
+
+    if (broadcast.scheduledFunctionId) {
+      await ctx.scheduler.cancel(broadcast.scheduledFunctionId);
+    }
+
+    await ctx.db.patch(args.broadcastId, {
+      status: "cancelled",
+      cancelledAt: Date.now(),
+    });
+    return { cancelled: true };
   },
 });

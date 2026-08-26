@@ -8,12 +8,15 @@ import {
   AlertCircle,
   Search,
   X,
+  CalendarClock,
 } from "lucide-react";
+import { format } from "date-fns";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import AlertDialog from "../ui/AlertDialog";
 import MessageDialog from "../ui/MessageDialog";
 import PromptDialog from "../ui/PromptDialog";
+import { DateTimePicker } from "../ui/date-time-picker";
 import { EmailTestingPanel } from "./EmailTestingPanel";
 import { EmailTemplatesManager } from "./EmailTemplatesManager";
 import { useDialog } from "../../hooks/useDialog";
@@ -153,6 +156,16 @@ export function EmailManagement() {
   const [broadcastContent, setBroadcastContent] = useState("");
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
+  const [broadcastSuccessMessage, setBroadcastSuccessMessage] = useState("");
+
+  // Delivery timing: send immediately or schedule for a future date and time
+  const [deliveryMode, setDeliveryMode] = useState<"now" | "schedule">("now");
+  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(
+    undefined,
+  );
+  const [cancellingBroadcastId, setCancellingBroadcastId] = useState<
+    string | null
+  >(null);
 
   // User search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -224,6 +237,14 @@ export function EmailManagement() {
   );
   const sendBroadcastToTagMutation = useMutation(
     api.emails.broadcast.sendBroadcastToTag,
+  );
+  // Scheduled (queued) broadcasts and the cancel action
+  const scheduledBroadcasts = useQuery(
+    api.emails.broadcast.listScheduledBroadcasts,
+    {},
+  );
+  const cancelScheduledBroadcastMutation = useMutation(
+    api.emails.broadcast.cancelScheduledBroadcast,
   );
   const forceRefreshUserMutation = useMutation(
     api.users.forceRefreshCurrentUser,
@@ -340,8 +361,25 @@ export function EmailManagement() {
       return;
     }
 
+    // Scheduled sends need a valid future date and time
+    if (deliveryMode === "schedule") {
+      if (!scheduledDate) {
+        setError("Please pick a date and time to schedule the broadcast.");
+        return;
+      }
+      if (scheduledDate.getTime() <= Date.now()) {
+        setError("The scheduled time must be in the future.");
+        return;
+      }
+    }
+
     setIsSendingBroadcast(true);
     setError(null);
+
+    const scheduledAtMs =
+      deliveryMode === "schedule" && scheduledDate
+        ? scheduledDate.getTime()
+        : undefined;
 
     try {
       let result;
@@ -349,6 +387,7 @@ export function EmailManagement() {
         result = await sendBroadcastMutation({
           subject: broadcastSubject.trim(),
           htmlContent: broadcastContent.trim(),
+          scheduledAtMs,
         });
       } else if (recipientMode === "tag") {
         result = await sendBroadcastToTagMutation({
@@ -356,23 +395,32 @@ export function EmailManagement() {
           htmlContent: broadcastContent.trim(),
           tagId: selectedTagId as any,
           statuses: tagStatuses,
+          scheduledAtMs,
         });
       } else {
         result = await sendBroadcastToSelectedMutation({
           subject: broadcastSubject.trim(),
           htmlContent: broadcastContent.trim(),
           userIds: selectedUsers.map((u) => u._id as any),
+          scheduledAtMs,
         });
       }
 
       if (result.success) {
         setBroadcastSuccess(true);
+        setBroadcastSuccessMessage(
+          scheduledAtMs && scheduledDate
+            ? `Broadcast scheduled for ${format(scheduledDate, "EEE, MMM d, yyyy 'at' h:mm a")}.`
+            : "Broadcast email sent successfully!",
+        );
         setBroadcastSubject("");
         setBroadcastContent("");
         setSelectedUsers([]);
         setSearchQuery("");
         setSelectedTagId("");
         setTagSearchQuery("");
+        setScheduledDate(undefined);
+        setDeliveryMode("now");
         setTimeout(() => setBroadcastSuccess(false), 5000);
       } else {
         setError("Failed to send broadcast email. Please try again.");
@@ -387,13 +435,54 @@ export function EmailManagement() {
     }
   };
 
+  // Cancel a queued broadcast after a site-styled confirm
+  const handleCancelScheduled = (broadcast: {
+    _id: string;
+    subject: string;
+  }) => {
+    showConfirm(
+      "Cancel Scheduled Broadcast?",
+      `"${broadcast.subject}" will not be sent. This cannot be undone.`,
+      async () => {
+        setCancellingBroadcastId(broadcast._id);
+        try {
+          await cancelScheduledBroadcastMutation({
+            broadcastId: broadcast._id as any,
+          });
+        } catch (err) {
+          console.error("Failed to cancel scheduled broadcast:", err);
+          showMessage(
+            "Error",
+            err instanceof Error
+              ? err.message
+              : "Failed to cancel the scheduled broadcast.",
+            "error",
+          );
+        } finally {
+          setCancellingBroadcastId(null);
+        }
+      },
+      {
+        confirmButtonText: "Cancel Broadcast",
+        confirmButtonVariant: "destructive",
+        cancelButtonText: "Keep It",
+      },
+    );
+  };
+
   const handleAddUser = (user: {
     _id: string;
     name?: string;
     email: string;
+    unsubscribed?: boolean;
   }) => {
+    // Unsubscribed users can never be selected; the send path skips them too
+    if (user.unsubscribed) return;
     if (!selectedUsers.find((u) => u._id === user._id)) {
-      setSelectedUsers([...selectedUsers, user]);
+      setSelectedUsers([
+        ...selectedUsers,
+        { _id: user._id, name: user.name, email: user.email },
+      ]);
     }
     setSearchQuery("");
   };
@@ -588,7 +677,8 @@ export function EmailManagement() {
 
               {broadcastSuccess && (
                 <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-md text-sm">
-                  Broadcast email sent successfully to all users!
+                  {broadcastSuccessMessage ||
+                    "Broadcast email sent successfully!"}
                 </div>
               )}
 
@@ -1176,14 +1266,29 @@ export function EmailManagement() {
                                   <button
                                     key={user._id}
                                     onClick={() => handleAddUser(user)}
-                                    className="w-full px-3 py-2 text-left hover:bg-surface-hover flex items-center justify-between"
+                                    className={`w-full px-3 py-2 text-left flex items-center justify-between ${
+                                      user.unsubscribed
+                                        ? "cursor-not-allowed"
+                                        : "hover:bg-surface-hover"
+                                    }`}
                                     disabled={
+                                      user.unsubscribed ||
                                       !!selectedUsers.find(
                                         (u) => u._id === user._id,
                                       )
                                     }
+                                    aria-disabled={user.unsubscribed}
+                                    title={
+                                      user.unsubscribed
+                                        ? "This user opted out of emails and cannot be selected"
+                                        : undefined
+                                    }
                                   >
-                                    <div>
+                                    <div
+                                      className={
+                                        user.unsubscribed ? "opacity-50" : ""
+                                      }
+                                    >
                                       <div className="text-sm font-medium text-ink">
                                         {user.name || "Anonymous User"}
                                       </div>
@@ -1191,18 +1296,30 @@ export function EmailManagement() {
                                         {user.email}
                                       </div>
                                     </div>
-                                    {selectedUsers.find(
-                                      (u) => u._id === user._id,
-                                    ) && (
-                                      <span className="text-xs text-green-600">
-                                        Added
+                                    {user.unsubscribed ? (
+                                      <span className="text-xs font-medium text-red-600 flex-shrink-0">
+                                        Unsubscribed
                                       </span>
+                                    ) : (
+                                      selectedUsers.find(
+                                        (u) => u._id === user._id,
+                                      ) && (
+                                        <span className="text-xs text-green-600 flex-shrink-0">
+                                          Added
+                                        </span>
+                                      )
                                     )}
                                   </button>
                                 ))}
                               </div>
                             )}
                         </div>
+
+                        <p className="text-xs text-soft">
+                          Unsubscribed users are marked and cannot be selected.
+                          Anyone who opts out before a send (including scheduled
+                          sends) is skipped automatically.
+                        </p>
 
                         {/* Selected Users */}
                         {selectedUsers.length > 0 && (
@@ -1276,41 +1393,150 @@ export function EmailManagement() {
                   </p>
                 </div>
 
+                {/* Delivery timing: send now or schedule for later */}
+                <div>
+                  <label className="block text-sm font-medium text-copy mb-2">
+                    Delivery
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="inline-flex rounded-md border border-hairline p-0.5 bg-surface-alt">
+                      {(
+                        [
+                          { key: "now", label: "Send now" },
+                          { key: "schedule", label: "Schedule" },
+                        ] as const
+                      ).map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => setDeliveryMode(option.key)}
+                          disabled={isSendingBroadcast}
+                          aria-pressed={deliveryMode === option.key}
+                          className={`px-3 py-1.5 text-sm font-medium rounded transition-colors ${
+                            deliveryMode === option.key
+                              ? "bg-cta text-on-cta"
+                              : "text-copy hover:bg-surface-hover"
+                          } disabled:opacity-50`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {deliveryMode === "schedule" && (
+                      <DateTimePicker
+                        value={scheduledDate}
+                        onChange={setScheduledDate}
+                        placeholder="Pick a date and time"
+                        disabled={isSendingBroadcast}
+                      />
+                    )}
+                  </div>
+                  {deliveryMode === "schedule" && (
+                    <p className="text-xs text-soft mt-1">
+                      Recipients are resolved when the broadcast sends, so
+                      unsubscribes between now and then are respected.
+                    </p>
+                  )}
+                </div>
+
                 <div className="flex items-center gap-4">
                   <button
                     onClick={handleSendBroadcast}
                     disabled={
                       isSendingBroadcast ||
                       !broadcastSubject.trim() ||
-                      !broadcastContent.trim()
+                      !broadcastContent.trim() ||
+                      (deliveryMode === "schedule" && !scheduledDate)
                     }
                     className="flex items-center gap-2 px-4 py-2 bg-cta text-on-cta rounded-md hover:bg-cta-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isSendingBroadcast ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-surface"></div>
+                    ) : deliveryMode === "schedule" ? (
+                      <CalendarClock className="w-4 h-4" />
                     ) : (
                       <Users className="w-4 h-4" />
                     )}
                     {isSendingBroadcast
-                      ? "Sending..."
-                      : recipientMode === "all"
-                        ? "Send to All Users"
-                        : recipientMode === "tag"
-                          ? `Send to Tag${tagRecipientCount !== undefined && selectedTagId ? ` (${tagRecipientCount})` : ""}`
-                          : `Send to ${selectedUsers.length} Selected User${selectedUsers.length !== 1 ? "s" : ""}`}
+                      ? deliveryMode === "schedule"
+                        ? "Scheduling..."
+                        : "Sending..."
+                      : deliveryMode === "schedule"
+                        ? "Schedule Broadcast"
+                        : recipientMode === "all"
+                          ? "Send to All Users"
+                          : recipientMode === "tag"
+                            ? `Send to Tag${tagRecipientCount !== undefined && selectedTagId ? ` (${tagRecipientCount})` : ""}`
+                            : `Send to ${selectedUsers.length} Selected User${selectedUsers.length !== 1 ? "s" : ""}`}
                   </button>
 
                   <div className="text-sm text-copy">
                     <AlertCircle className="w-4 h-4 inline mr-1" />
-                    {recipientMode === "all"
-                      ? "This will send to all users who haven't unsubscribed"
-                      : recipientMode === "tag"
-                        ? "This will send to everyone who used the selected tag"
-                        : `This will send to ${selectedUsers.length} selected user${selectedUsers.length !== 1 ? "s" : ""}`}
+                    {deliveryMode === "schedule" && scheduledDate
+                      ? `Delivers ${format(scheduledDate, "EEE, MMM d 'at' h:mm a")} to ${
+                          recipientMode === "all"
+                            ? "all subscribed users"
+                            : recipientMode === "tag"
+                              ? "everyone who used the selected tag"
+                              : `${selectedUsers.length} selected user${selectedUsers.length !== 1 ? "s" : ""}`
+                        }`
+                      : recipientMode === "all"
+                        ? "This will send to all users who haven't unsubscribed"
+                        : recipientMode === "tag"
+                          ? "This will send to everyone who used the selected tag"
+                          : `This will send to ${selectedUsers.length} selected user${selectedUsers.length !== 1 ? "s" : ""}`}
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Scheduled Broadcasts: queued sends with a cancel action */}
+            {scheduledBroadcasts && scheduledBroadcasts.length > 0 && (
+              <div className="bg-surface rounded-lg p-6 border border-hairline">
+                <div className="flex items-center gap-3 mb-4">
+                  <CalendarClock className="w-6 h-6 text-copy" />
+                  <h2 className="text-xl font-medium text-copy">
+                    Scheduled Broadcasts
+                  </h2>
+                </div>
+                <div className="rounded-md border border-hairline divide-y divide-hairline">
+                  {scheduledBroadcasts.map((broadcast) => (
+                    <div
+                      key={broadcast._id}
+                      className="flex items-center justify-between gap-3 px-4 py-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-ink truncate">
+                          {broadcast.subject}
+                        </p>
+                        <p className="text-xs text-soft">
+                          {broadcast.scheduledAt
+                            ? format(
+                                new Date(broadcast.scheduledAt),
+                                "EEE, MMM d, yyyy 'at' h:mm a",
+                              )
+                            : "Pending"}
+                          {broadcast.recipientSummary
+                            ? ` · ${broadcast.recipientSummary}`
+                            : ""}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleCancelScheduled(broadcast)}
+                        disabled={cancellingBroadcastId === broadcast._id}
+                        className="flex-shrink-0 px-3 py-1.5 text-sm font-medium text-red-600 border border-hairline rounded-md hover:bg-red-50 transition-colors disabled:opacity-50"
+                      >
+                        {cancellingBroadcastId === broadcast._id
+                          ? "Cancelling..."
+                          : "Cancel"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Email Status Overview */}
             <div className="bg-surface rounded-lg p-6 border border-hairline">

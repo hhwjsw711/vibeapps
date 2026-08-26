@@ -178,7 +178,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 - `convex/emails/spam.ts`: Spam notification email to submitters when their submission is marked as spam (includes the reason, prefers the account email over the form email, sets reply-to to `ADMIN_EMAIL` when configured, skips silently for anonymous submissions without an email) plus the `spam_review_request` admin emails sent when a submitter disputes a mark, which skip unsubscribed admins and deep-link to the spam dashboard
 - `convex/emails/queries.ts`: V8 runtime queries and mutations for email data, including the Resend onEmailEvent callback that syncs emailLogs delivery statuses and records first-open timestamps into log metadata (separated from Node.js actions)
 - `convex/emails/helpers.ts`: Helper queries for email processing and data fetching
-- `convex/emails/broadcast.ts`: Admin broadcast email system with user search, tag-based targeting (send to everyone who used a tag, filterable by submission status), recipient counts, and batch processing
+- `convex/emails/broadcast.ts`: Admin broadcast email system with user search, tag-based targeting (send to everyone who used a tag, filterable by submission status), recipient counts, batch processing, and scheduled sends (optional `scheduledAtMs` via the Convex scheduler with a queued record, list query, and cancel mutation)
 - `convex/sendEmails.ts`: Convex Resend Component client (onEmailEvent callback registered) with subject prefix and from address enforcement, plus admin sample notification emails that bypass per-type toggles
 - `convex/emailSettings.ts`: User email preferences management with unsubscribe functionality
 - `convex/testDailyEmail.ts`: Admin testing functions for daily/weekly email triggers with clear logs utility
@@ -259,7 +259,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 - `src/components/admin/LumaEventsSettings.tsx`: Admin Luma manager: calendar URL, sidebar heading, field defaults, surface toggles synced with Sidebar widgets, test/sync, add-by-URL, list/reorder/placements
 - `src/components/admin/NumbersView.tsx`: Analytics and metrics dashboard with key totals plus follower and following rankings
 - `src/components/admin/ReportManagement.tsx`: User report review and resolution with status tracking and email notification integration
-- `src/components/admin/EmailManagement.tsx`: Complete email system management with Send & Settings and Templates sub tabs: global toggle, per-type send options (including the judging group emails toggle), broadcast emails (all users, selected users, or everyone who used a tag), user search, testing tools, and admin alert configuration
+- `src/components/admin/EmailManagement.tsx`: Complete email system management with Send & Settings and Templates sub tabs: global toggle, per-type send options (including the judging group emails toggle), broadcast emails (all users, selected users, or everyone who used a tag) with Send now or Schedule delivery and a Scheduled Broadcasts list with cancel, user search, testing tools, and admin alert configuration
 - `src/components/admin/EmailTemplatesManager.tsx`: Templates sub tab of Email Management: create, edit, and delete reusable email templates (name, subject, markdown body, optional signature) with a supported-variables legend and a live iframe preview rendered by the same shared renderer the backend uses
 - `src/components/admin/SubmitFormFieldManagement.tsx`: Manage fields for a specific submit form
 - `src/components/admin/CreateSubmitFormModal.tsx`: Modal to create new submit forms
@@ -320,6 +320,7 @@ All PRD files are now organized in the `prds/` folder for better project structu
 - `src/components/ui/popover.tsx`: Radix popover surface styled to match the site design system
 - `src/components/ui/calendar.tsx`: Site-styled calendar built on react-day-picker (replaces native date inputs)
 - `src/components/ui/date-range-picker.tsx`: Date range picker with preset windows (last 7/30 days, this/last month, last 3 months) and a two-month range calendar
+- `src/components/ui/date-time-picker.tsx`: Single date and time picker (calendar plus hour, minute, and AM/PM selects) used for scheduling broadcast emails
 - `src/components/ui/AlertDialog.tsx`: Alert and confirmation dialogs with keyboard support (autofocus Cancel, Tab trap between buttons, Enter activates, aria-modal)
 - `src/components/ui/AuthRequiredDialog.tsx`: Authentication requirement modal
 
