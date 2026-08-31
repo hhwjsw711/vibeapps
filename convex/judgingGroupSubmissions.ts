@@ -692,6 +692,119 @@ export const listByGroup = query({
 });
 
 /**
+ * Read-only roster of every submission in a group, shaped for the admin
+ * "View submissions" table: title, submitted date, tags, submitter, and the
+ * project/social links. No scores or judging state — this view never mutates.
+ */
+export const listSubmissionsTable = query({
+  args: { groupId: v.id("judgingGroups") },
+  returns: v.array(
+    v.object({
+      storyId: v.id("stories"),
+      title: v.string(),
+      slug: v.string(),
+      url: v.string(),
+      submittedAt: v.number(),
+      addedAt: v.number(),
+      status: v.union(
+        v.literal("pending"),
+        v.literal("approved"),
+        v.literal("rejected"),
+      ),
+      tags: v.array(
+        v.object({
+          _id: v.id("tags"),
+          name: v.string(),
+          backgroundColor: v.optional(v.string()),
+          textColor: v.optional(v.string()),
+          emoji: v.optional(v.string()),
+        }),
+      ),
+      submitterName: v.optional(v.string()),
+      submitterUsername: v.optional(v.string()),
+      linkedinUrl: v.optional(v.string()),
+      githubUrl: v.optional(v.string()),
+      twitterUrl: v.optional(v.string()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requireJudgingGroupPermission(ctx, args.groupId, "judging.view");
+
+    const submissions = await ctx.db
+      .query("judgingGroupSubmissions")
+      .withIndex("by_groupId", (q) => q.eq("groupId", args.groupId))
+      .collect();
+
+    const stories = await Promise.all(
+      submissions.map(async (submission) => {
+        const story = await ctx.db.get(submission.storyId);
+        return isStoryValidForJudging(story)
+          ? { addedAt: submission.addedAt, story }
+          : null;
+      }),
+    );
+    const visible = stories.filter(
+      (entry): entry is NonNullable<typeof entry> => entry !== null,
+    );
+
+    // Batch-resolve tags and submitter accounts once instead of per row.
+    const tagIds = new Set<Id<"tags">>();
+    const userIds = new Set<Id<"users">>();
+    for (const { story } of visible) {
+      for (const tagId of story.tagIds ?? []) tagIds.add(tagId);
+      if (story.userId) userIds.add(story.userId);
+    }
+
+    const [tagDocs, userDocs] = await Promise.all([
+      Promise.all([...tagIds].map((id) => ctx.db.get(id))),
+      Promise.all([...userIds].map((id) => ctx.db.get(id))),
+    ]);
+
+    const tagMap = new Map(
+      tagDocs
+        .filter((tag): tag is Doc<"tags"> => tag !== null)
+        .map((tag) => [tag._id, tag]),
+    );
+    const userMap = new Map(
+      userDocs
+        .filter((user): user is Doc<"users"> => user !== null)
+        .map((user) => [user._id, user]),
+    );
+
+    const rows = visible.map(({ addedAt, story }) => {
+      const submitter = story.userId ? userMap.get(story.userId) : undefined;
+      return {
+        storyId: story._id,
+        title: story.title,
+        slug: story.slug,
+        url: story.url,
+        submittedAt: story._creationTime,
+        addedAt,
+        status: story.status,
+        tags: (story.tagIds ?? [])
+          .map((tagId) => tagMap.get(tagId))
+          .filter((tag): tag is Doc<"tags"> => tag !== undefined)
+          .map((tag) => ({
+            _id: tag._id,
+            name: tag.name,
+            backgroundColor: tag.backgroundColor,
+            textColor: tag.textColor,
+            emoji: tag.emoji,
+          })),
+        submitterName: story.submitterName ?? submitter?.name,
+        submitterUsername: submitter?.username,
+        linkedinUrl: story.linkedinUrl,
+        githubUrl: story.githubUrl,
+        twitterUrl: story.twitterUrl,
+      };
+    });
+
+    // Newest submission first; the client can re-sort any column.
+    return rows.sort((a, b) => b.submittedAt - a.submittedAt);
+  },
+});
+
+/**
  * Get available submissions that can be added to a group
  */
 export const getAvailableSubmissions = query({
