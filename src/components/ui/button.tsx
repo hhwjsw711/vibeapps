@@ -21,7 +21,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     } else if (variant === "ghost") {
       baseStyle += " hover:bg-surface-hover text-copy";
     } else if (variant === "link") {
-      baseStyle += " text-blue-600 hover:underline";
+      baseStyle += " text-brand hover:underline";
     } else {
       // default
       baseStyle += " bg-cta text-on-cta hover:bg-cta-hover";

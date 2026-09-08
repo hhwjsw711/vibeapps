@@ -168,7 +168,7 @@ export function SubmitFormBuilder({ formId, onBack }: SubmitFormBuilderProps) {
               <div className="pt-4 border-t border-hairline">
                 <Button
                   onClick={() => setShowEditModal(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="bg-cta text-on-cta hover:bg-cta-hover"
                 >
                   <Settings className="w-4 h-4 mr-2" />
                   Edit Form Settings
@@ -301,7 +301,7 @@ export function SubmitFormBuilder({ formId, onBack }: SubmitFormBuilderProps) {
                   onClick={() =>
                     window.open(`/submit/${formWithFields.slug}`, "_blank")
                   }
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="bg-cta text-on-cta hover:bg-cta-hover"
                 >
                   <Eye className="w-4 h-4 mr-2" />
                   View Live Form

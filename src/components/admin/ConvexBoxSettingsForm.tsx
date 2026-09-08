@@ -266,7 +266,7 @@ export function ConvexBoxSettingsForm() {
       <Button
         type="submit"
         disabled={isSubmitting}
-        className="bg-blue-600 hover:bg-blue-700 text-white">
+        className="bg-cta text-on-cta hover:bg-cta-hover">
         {isSubmitting ? "Saving..." : "Save Settings"}
       </Button>
     </form>

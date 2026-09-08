@@ -787,7 +787,7 @@ export function EmailManagement() {
                           );
                         }
                       }}
-                      className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                      className="px-3 py-1 bg-cta text-on-cta text-xs rounded hover:bg-cta-hover"
                     >
                       🔄 Refresh My Email
                     </button>

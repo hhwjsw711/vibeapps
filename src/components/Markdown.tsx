@@ -13,7 +13,12 @@ export function Markdown({ children }: Props) {
       rehypePlugins={[rehypeHighlight]}
       components={{
         a: ({ node, ...props }) => (
-          <a {...props} target="_blank" rel="noopener noreferrer" />
+          <a
+            {...props}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+          />
         ),
         p: ({ node, children, ...props }) => {
           // Check if paragraph contains block-level elements like pre/code blocks

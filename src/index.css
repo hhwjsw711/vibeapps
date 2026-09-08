@@ -222,3 +222,137 @@
     @apply text-ink;
   }
 }
+
+/* ------------------------------------------------------------------
+   Dark theme: prose adaptation
+
+   @tailwindcss/typography drives every prose color through
+   --tw-prose-* custom properties (its own .prose-invert works exactly
+   this way). Redefining them under [data-theme="dark"] bridges all
+   .prose containers (story detail source notes, comments, admin docs,
+   judging pages...) onto theme tokens in one place.
+
+   Kept unlayered so it always wins over the plugin defaults.
+   ------------------------------------------------------------------ */
+[data-theme="dark"] .prose {
+  --tw-prose-body: var(--th-copy);
+  --tw-prose-headings: var(--th-ink);
+  --tw-prose-lead: var(--th-soft);
+  --tw-prose-links: var(--th-brand);
+  --tw-prose-bold: var(--th-ink);
+  --tw-prose-counters: var(--th-faint);
+  --tw-prose-bullets: var(--th-hairline-strong);
+  --tw-prose-hr: var(--th-hairline);
+  --tw-prose-quotes: var(--th-copy);
+  --tw-prose-quote-borders: var(--th-hairline-strong);
+  --tw-prose-captions: var(--th-faint);
+  --tw-prose-code: var(--th-ink);
+  --tw-prose-pre-code: var(--th-ink);
+  --tw-prose-pre-bg: var(--th-canvas);
+  --tw-prose-th-borders: var(--th-hairline-strong);
+  --tw-prose-td-borders: var(--th-hairline);
+  /* Invert variants too, in case .prose-invert is ever composed */
+  --tw-prose-invert-body: var(--th-copy);
+  --tw-prose-invert-headings: var(--th-ink);
+  --tw-prose-invert-lead: var(--th-soft);
+  --tw-prose-invert-links: var(--th-brand);
+  --tw-prose-invert-bold: var(--th-ink);
+  --tw-prose-invert-counters: var(--th-faint);
+  --tw-prose-invert-bullets: var(--th-hairline-strong);
+  --tw-prose-invert-hr: var(--th-hairline);
+  --tw-prose-invert-quotes: var(--th-copy);
+  --tw-prose-invert-quote-borders: var(--th-hairline-strong);
+  --tw-prose-invert-captions: var(--th-faint);
+  --tw-prose-invert-code: var(--th-ink);
+  --tw-prose-invert-pre-code: var(--th-ink);
+  --tw-prose-invert-pre-bg: var(--th-canvas);
+  --tw-prose-invert-th-borders: var(--th-hairline-strong);
+  --tw-prose-invert-td-borders: var(--th-hairline);
+}
+
+/* ------------------------------------------------------------------
+   Dark theme: highlight.js overrides
+
+   Markdown.tsx imports highlight.js/styles/github.css (light colors)
+   globally. Scoped at double specificity, this block re-colors every
+   .hljs token for dark surfaces so code blocks stay legible without a
+   second stylesheet or JS theme switching. Colors mirror
+   highlight.js/styles/github-dark.css — keep in sync when bumping hljs.
+   ------------------------------------------------------------------ */
+[data-theme="dark"] .hljs {
+  color: #c9d1d9;
+  background: #0d1117;
+}
+[data-theme="dark"] .hljs-doctag,
+[data-theme="dark"] .hljs-keyword,
+[data-theme="dark"] .hljs-meta .hljs-keyword,
+[data-theme="dark"] .hljs-template-tag,
+[data-theme="dark"] .hljs-template-variable,
+[data-theme="dark"] .hljs-type,
+[data-theme="dark"] .hljs-variable.language_ {
+  color: #ff7b72;
+}
+[data-theme="dark"] .hljs-title,
+[data-theme="dark"] .hljs-title.class_,
+[data-theme="dark"] .hljs-title.class_.inherited__,
+[data-theme="dark"] .hljs-title.function_ {
+  color: #d2a8ff;
+}
+[data-theme="dark"] .hljs-attr,
+[data-theme="dark"] .hljs-attribute,
+[data-theme="dark"] .hljs-literal,
+[data-theme="dark"] .hljs-meta,
+[data-theme="dark"] .hljs-number,
+[data-theme="dark"] .hljs-operator,
+[data-theme="dark"] .hljs-variable,
+[data-theme="dark"] .hljs-selector-attr,
+[data-theme="dark"] .hljs-selector-class,
+[data-theme="dark"] .hljs-selector-id {
+  color: #79c0ff;
+}
+[data-theme="dark"] .hljs-regexp,
+[data-theme="dark"] .hljs-string,
+[data-theme="dark"] .hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+[data-theme="dark"] .hljs-built_in,
+[data-theme="dark"] .hljs-symbol {
+  color: #ffa657;
+}
+[data-theme="dark"] .hljs-comment,
+[data-theme="dark"] .hljs-code,
+[data-theme="dark"] .hljs-formula {
+  color: #8b949e;
+}
+[data-theme="dark"] .hljs-name,
+[data-theme="dark"] .hljs-quote,
+[data-theme="dark"] .hljs-selector-tag,
+[data-theme="dark"] .hljs-selector-pseudo {
+  color: #7ee787;
+}
+[data-theme="dark"] .hljs-subst {
+  color: #c9d1d9;
+}
+[data-theme="dark"] .hljs-section {
+  color: #1f6feb;
+  font-weight: bold;
+}
+[data-theme="dark"] .hljs-bullet {
+  color: #f2cc60;
+}
+[data-theme="dark"] .hljs-emphasis {
+  color: #c9d1d9;
+  font-style: italic;
+}
+[data-theme="dark"] .hljs-strong {
+  color: #c9d1d9;
+  font-weight: bold;
+}
+[data-theme="dark"] .hljs-addition {
+  color: #aff5b4;
+  background-color: #033a16;
+}
+[data-theme="dark"] .hljs-deletion {
+  color: #ffdcd7;
+  background-color: #67060c;
+}

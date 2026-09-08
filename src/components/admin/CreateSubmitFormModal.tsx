@@ -311,7 +311,7 @@ export function CreateSubmitFormModal({
                   !formData.title.trim() ||
                   !formData.customHiddenTag.trim()
                 }
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-cta text-on-cta hover:bg-cta-hover"
               >
                 {isLoading ? "Creating..." : "Create Form"}
               </Button>

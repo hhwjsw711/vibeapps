@@ -1396,7 +1396,7 @@ export default function JudgingInterfacePage() {
                       <div className="flex items-center gap-4 flex-wrap">
                         <Link
                           to={`/s/${currentSubmission.slug}`}
-                          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+                          className="inline-flex items-center px-4 py-2 bg-cta text-on-cta rounded-md hover:bg-cta-hover transition-colors text-sm"
                         >
                           <ExternalLink className="w-4 h-4 mr-2" />
                           Visit Submission
