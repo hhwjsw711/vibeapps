@@ -18,6 +18,7 @@ import {
   ScrollText,
   Settings,
   Sparkles,
+  Table2,
 } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { NotFoundPage } from "./NotFoundPage";
@@ -35,6 +36,7 @@ import { GroupOverviewSection } from "../components/admin/judging/GroupOverviewS
 import { GroupSettingsSection } from "../components/admin/judging/GroupSettingsSection";
 import { GroupAccessSection } from "../components/admin/judging/GroupAccessSection";
 import { GroupSubmissionsSection } from "../components/admin/judging/GroupSubmissionsSection";
+import { GroupSubmissionsTableSection } from "../components/admin/judging/GroupSubmissionsTableSection";
 import { GroupSubmitPageSection } from "../components/admin/judging/GroupSubmitPageSection";
 import { GroupAiSection } from "../components/admin/judging/GroupAiSection";
 import { GroupEmailsSection } from "../components/admin/judging/GroupEmailsSection";
@@ -61,6 +63,8 @@ const SECTIONS = [
     icon: ClipboardList,
     perm: "judging.manage",
   },
+  // Read-only roster of what is already in the group (list, copy, open)
+  { key: "view-submissions", label: "View submissions", icon: Table2, perm: null },
   {
     key: "submit-page",
     label: "Submit page",
@@ -303,6 +307,9 @@ function GroupWorkspace({ group }: { group: GroupDetails }) {
           )}
           {activeSection === "submissions" && canManage && (
             <GroupSubmissionsSection group={group} />
+          )}
+          {activeSection === "view-submissions" && (
+            <GroupSubmissionsTableSection group={group} />
           )}
           {activeSection === "submit-page" && canManage && (
             <GroupSubmitPageSection group={group} />

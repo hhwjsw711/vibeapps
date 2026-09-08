@@ -47,6 +47,15 @@ import { debounce } from "lodash-es";
 import { toast } from "sonner";
 import { useDialog } from "@/hooks/useDialog";
 
+// Convex mutation errors arrive wrapped ("[CONVEX ...] ... Uncaught Error:
+// message"). Pull out the real reason so admins can act on it.
+function cleanMutationError(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  const match = error.message.match(/Uncaught Error:\s*([^\n]+)/);
+  if (match) return match[1].replace(/\s+at handler.*$/, "").trim();
+  return error.message.replace(/^\[.*?\]\s*/, "").trim() || fallback;
+}
+
 type Comment = Doc<"comments"> & {
   authorName?: string;
   authorUsername?: string;
@@ -616,7 +625,10 @@ export function ContentModeration() {
         teamName: editFormData.teamName || undefined,
         teamMemberCount: editFormData.teamMemberCount || undefined,
         teamMembers: teamMembers.length > 0 ? teamMembers : undefined,
-        tagIds: editSelectedTagIds.length > 0 ? editSelectedTagIds : undefined,
+        // Always send the full selection (including an empty array) so that
+        // clearing the last tag actually persists. Sending undefined makes the
+        // backend skip the tag patch entirely.
+        tagIds: editSelectedTagIds,
         newTagNames: newTagNames.length > 0 ? newTagNames : undefined,
         additionalImageIds: editFormData.additionalImageIds,
         removeAdditionalImages: editFormData.removeAdditionalImages,
@@ -637,7 +649,7 @@ export function ContentModeration() {
       toast.success("Story updated successfully!");
     } catch (error) {
       console.error("Failed to update story:", error);
-      toast.error("Failed to update story");
+      toast.error(cleanMutationError(error, "Failed to update story"));
     }
   };
 
@@ -818,7 +830,9 @@ export function ContentModeration() {
       setBulkActionType(null);
     } catch (error) {
       console.error("Failed to add tags:", error);
-      toast.error("Failed to add tag to some submissions");
+      toast.error(
+        cleanMutationError(error, "Failed to add tag to some submissions"),
+      );
     }
   };
 
@@ -835,7 +849,9 @@ export function ContentModeration() {
       setBulkActionType(null);
     } catch (error) {
       console.error("Failed to remove tags:", error);
-      toast.error("Failed to remove tag from some submissions");
+      toast.error(
+        cleanMutationError(error, "Failed to remove tag from some submissions"),
+      );
     }
   };
 
