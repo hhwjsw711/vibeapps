@@ -74,7 +74,6 @@ import type * as storyFormFields from "../storyFormFields.js";
 import type * as storyRatings from "../storyRatings.js";
 import type * as submitForms from "../submitForms.js";
 import type * as tags from "../tags.js";
-import type * as testAiGateway from "../testAiGateway.js";
 import type * as testDailyEmail from "../testDailyEmail.js";
 import type * as testEmailFreshness from "../testEmailFreshness.js";
 import type * as testUserReportEmail from "../testUserReportEmail.js";
@@ -157,7 +156,6 @@ declare const fullApi: ApiFromModules<{
   storyRatings: typeof storyRatings;
   submitForms: typeof submitForms;
   tags: typeof tags;
-  testAiGateway: typeof testAiGateway;
   testDailyEmail: typeof testDailyEmail;
   testEmailFreshness: typeof testEmailFreshness;
   testUserReportEmail: typeof testUserReportEmail;
